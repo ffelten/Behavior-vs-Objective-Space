@@ -21,7 +21,7 @@ classifiers = [
     'Topic :: Scientific/Engineering :: Artificial Intelligence',
 ]
 dependencies = [
-    "numpy <=2.0",
+    "numpy",
     "mo-gymnasium >= 1.2.0",
     "morl-baselines >= 1.2.0",
     "scipy >= 1.16.1",
@@ -177,22 +177,3 @@ docstring-code-format = true
 # This only has an effect when the `docstring-code-format` setting is
 # enabled.
 docstring-code-line-length = "dynamic"
-
-[tool.mypy]
-warn_redundant_casts = true
-warn_unused_ignores = true
-files = ["engibench/", "tests/"]
-exclude = [
-]
-[[tool.mypy.overrides]]
-module = [
-    "gymnasium",
-    "mo-gymnasium",
-    "morl-baselines",
-    "scipy.*",
-    "seaborn",
-    "matplotlib",
-    "matplotlib.*",
-    "pandas",
-]
-ignore_missing_imports = true
