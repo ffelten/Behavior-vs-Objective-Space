@@ -1,9 +1,11 @@
+"""This script plots the Pareto frontier for the Left-Right DST environment."""
+
 import matplotlib.pyplot as plt
 import mo_gymnasium as mo_gym
 import numpy as np
 import numpy.typing as npt
-import morl_behavior_objective
 
+import morl_behavior_objective  # noqa: F401
 
 LEFT = 2
 RIGHT = 3
@@ -72,7 +74,7 @@ plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
 plt.xlabel("Time")
 plt.ylabel("Treasure Value")
 plt.title("Pareto Frontier")
-plt.grid(True, alpha=0.3)
+plt.grid(visible=True, alpha=0.3)
 
 # Adjust layout to prevent legend cutoff
 plt.tight_layout()
