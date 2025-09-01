@@ -1041,10 +1041,10 @@ def main():
         print(f"\n--- Calculating Original Expert Reward Statistics for {name_env} ---")
         if args.Reacherv4 or args.Pusherv4:
             mean_expert_reward, std_expert_reward = calculate_original_expert_reward_stats(trajectories_withrew)                    
-        elif args.Traj2d:
-            import my_envs.traj2d_gymnasium as traj2d_mod
-            env = traj2d_mod.Traj(mode_idx=0)
-            mean_expert_reward, std_expert_reward = calculate_expert_reward(demos_0[:counts[0]], env, mode_idx=0, env_name=env_name)
+        # elif args.Traj2d:
+        #     import my_envs.traj2d_gymnasium as traj2d_mod
+        #     env = traj2d_mod.Traj(mode_idx=0)
+        #     mean_expert_reward, std_expert_reward = calculate_expert_reward(demos_0[:counts[0]], env, mode_idx=0, env_name=env_name)
 
         print(f"Original Expert Reward (from stored .rews): Mean={mean_expert_reward:.4f} ± Std={std_expert_reward:.4f}")
 
@@ -1132,10 +1132,10 @@ def main():
         print(f"\n--- Calculating Original Expert Reward Statistics for {name_env} ---")
         if args.Reacherv4 or args.Pusherv4 or args.Humanoidv4 or args.Walker2dv4:
             mean_expert_reward, std_expert_reward = calculate_original_expert_reward_stats(trajectories_withrew)                    
-        elif args.Traj2d:
-            import my_envs.traj2d_gymnasium as traj2d_mod
-            env = traj2d_mod.Traj(mode_idx=0)
-            mean_expert_reward, std_expert_reward = calculate_expert_reward(demos_0[:counts[0]], env, mode_idx=0, env_name=env_name)
+        # elif args.Traj2d:
+        #     import my_envs.traj2d_gymnasium as traj2d_mod
+        #     env = traj2d_mod.Traj(mode_idx=0)
+        #     mean_expert_reward, std_expert_reward = calculate_expert_reward(demos_0[:counts[0]], env, mode_idx=0, env_name=env_name)
 
         print(f"Original Expert Reward (from stored .rews): Mean={mean_expert_reward:.4f} ± Std={std_expert_reward:.4f}")
 

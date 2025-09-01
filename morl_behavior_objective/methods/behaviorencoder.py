@@ -369,6 +369,29 @@ class GridEncoderDropout3D(nn.Module):
         x_fc_out = self.fc(x_flat) # fc input is hidden_channels*4
         return x_fc_out.view(B, T_dim, -1) # [B, T, out_dim]
 
+class PositionalEncoding(nn.Module):
+    "Implement the PE function."
+
+    def __init__(self, d_model, dropout, max_len=30):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        # Compute the positional encodings once in log space.
+        pe = th.zeros(max_len, d_model)
+        position = th.arange(0, max_len).unsqueeze(1)
+        div_term = th.exp(
+            th.arange(0, d_model, 2) * -(math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = th.sin(position * div_term)
+        pe[:, 1::2] = th.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        x = x + self.pe[:, : x.size(1)].requires_grad_(False)
+        return self.dropout(x)
+
+## MODEL (also with autoencoder but not used not, kept in case)
 
 class BehavioralAutoencoderSA_AR(nn.Module):
     """
@@ -828,6 +851,8 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         attn_list_agg = stacked_attns.sum(dim=0).sum(dim=1)
 
         return normalized, attn_list_agg, _, _, cls_emb, cls_attn
+
+# For DeepInfoMax Loss
 
 class Discriminator(nn.Module):
     """A simple MLP to distinguish between positive and negative pairs."""
