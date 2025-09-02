@@ -6,7 +6,7 @@ import numpy as np
 import mo_gymnasium as mo_gym
 import torch as th  # for checkpoint inspection/manual load
 
- from gymnasium.wrappers import FlattenObservation  
+from gymnasium.wrappers import FlattenObservation  
 
 from morl_baselines.common.weights import equally_spaced_weights
 from morl_baselines.common.pareto import filter_pareto_dominated
@@ -19,7 +19,7 @@ from morl_baselines.multi_policy.gpi_pd.gpi_pd_continuous_action import (
 
 
 # ===================== CONFIG =====================
-MODE = "gpi"  # "gpi" or "morld"
+MODE = "morld"  # "gpi" or "morld"
 
 # Common
 ENV_ID = "mo-halfcheetah-v4"   # works for both discrete/continuous, we detect action space at runtime
@@ -36,7 +36,7 @@ GPI_OUTPUT_DIR = os.path.join("trajectories", "gpi", ENV_ID)
 SAVE_GPI_PICKLES = True  # save whole_front, pareto_front, pareto_weights
 
 # MORLD settings
-MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "..", "trained_policies", "multi_policy", "MORLD_checkpoint.tar")
+MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "..", "trained_policies", "multi_policy", "morld_cheetah.tar")
 LOAD_MORLD_REPLAY = False
 EPISODES_PER_POLICY = 50
 MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", ENV_ID)
@@ -269,10 +269,10 @@ def run_morld():
     agent = MORLD(env=eval_env, gamma=GAMMA, log=False, seed=SEED)
     agent.load(MORLD_CHECKPOINT, load_replay_buffer=LOAD_MORLD_REPLAY)
 
-    if not hasattr(agent, "population") or len(agent.population) == 0:
-        raise RuntimeError("MORLD population is empty after load().")
+    if not hasattr(agent, "archive") or len(agent.archive.individuals) == 0:
+        raise RuntimeError("MORLD pareto archive is empty after load().")
 
-    for pol in agent.population:
+    for pol in agent.archive.individuals:
         pid = getattr(pol, "id", None)
         pweights = getattr(pol, "weights", None)
         print(f"[MORLD] {ENV_ID}: running {EPISODES_PER_POLICY} episodes for policy {pid} with weights {pweights}")
