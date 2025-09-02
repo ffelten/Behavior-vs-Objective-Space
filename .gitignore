@@ -3,8 +3,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 trained_policies/
-trajectories/
-gpi_trajectories_by_weight/
+gpi_pareto/
 # C extensions
 *.so
 
