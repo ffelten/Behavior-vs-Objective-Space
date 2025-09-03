@@ -2,7 +2,8 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+trained_policies/
+gpi_pareto/
 # C extensions
 *.so
 
