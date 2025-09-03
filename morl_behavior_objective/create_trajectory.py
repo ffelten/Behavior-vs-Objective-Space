@@ -42,7 +42,7 @@ EPISODES_PER_POLICY = 50
 MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", ENV_ID)
 # =======================================================
 
-# -------------------- JSON helper (NEW) --------------------
+# -------------------- JSON helpergit st --------------------
 def make_json_safe(obj):
     """
     Recursively convert objects to JSON-serializable types:
@@ -176,7 +176,7 @@ def _rollout_gpi_with_weight(agent, env, w: np.ndarray, episodes: int, seed: int
         episode_actions = []
 
         while not (terminated or truncated):
-            action = agent.eval(obs, w)  # discrete -> int; continuous -> np array
+            action = agent.eval(obs, w)  
             s_flat = _flatten_obs(obs)
             a_ser = _action_to_serializable(action)
 
@@ -266,21 +266,19 @@ def run_gpi():
     env = mo_gym.make(ENV_ID)
     eval_env = mo_gym.make(ENV_ID)
 
-    # Optional: flatten obs for highway-like envs
     if "highway" in ENV_ID:
         env = FlattenObservation(env)
         eval_env = FlattenObservation(eval_env)
 
-    # Expose reward_space at top-level so library code finds it through wrappers
     env = _attach_reward_space(env)
     eval_env = _attach_reward_space(eval_env)
 
     reward_dim = env.reward_space.shape[0]
 
-    # Loader for discrete/continuous + GPILS/GPIPD
+    # loader for discrete/continuous + GPILS/GPIPD
     agent = load_gpi_agent(env, GPI_CHECKPOINT)
 
-    # Sample weights, evaluate, Pareto-filter
+    # sample weights, evaluate, Pareto-filter
     weights = equally_spaced_weights(reward_dim, n=NUM_SAMPLE_WEIGHTS)
     whole_front = _produce_whole_front(weights, agent, eval_env, NUM_EVAL_EPISODES_FOR_FRONT, discounted_vec_return=False)
     pareto_front, pareto_weights = _get_pareto_front(whole_front, weights)
@@ -301,7 +299,7 @@ def run_gpi():
 
         states, actions = _rollout_gpi_with_weight(agent, eval_env, w, EPISODES_PER_WEIGHT, seed=SEED)
 
-        # JSON-safe data structure (NEW: no raw ndarrays)
+        # JSON-safe data structure 
         json_data = {
             "return": return_vec,
             "trajectories": [states, actions],
@@ -337,7 +335,6 @@ def run_morld():
 
         all_trajectories = _rollout_morld_policy(pol, eval_env, EPISODES_PER_POLICY, seed=SEED)
 
-        # Return vector from archive evaluations (could be ndarray) -> JSON-safe later
         return_vec = agent.archive.evaluations[pid]
 
         json_data = {
