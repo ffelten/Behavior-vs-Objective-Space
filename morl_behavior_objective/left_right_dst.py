@@ -2,6 +2,7 @@
 
 import json
 import matplotlib.pyplot as plt
+from mo_gymnasium.envs.deep_sea_treasure import CONCAVE_MAP
 import mo_gymnasium as mo_gym
 import numpy as np
 import numpy.typing as npt
@@ -21,10 +22,25 @@ OPTIMAL_POLICIES = {
     "124_right": 9 * [RIGHT] + 10 * [DOWN],  # 19 moves
 }
 
+
+OPTIMAL_POLICIES_DST_CONCAVE = {
+    "1": 1 * [DOWN],  # 1 move
+    "2": 1 * [RIGHT] + 2 * [DOWN],  # 3 moves
+    "3": 2 * [RIGHT] + 3 * [DOWN],  # 5 moves
+    "5": 3 * [RIGHT] + 4 * [DOWN],  # 7 moves
+    "8": 4 * [RIGHT] + 4 * [DOWN],  # 8 moves
+    "16": 5 * [RIGHT] + 4 * [DOWN],  # 9 moves
+    "24": 6 * [RIGHT] + 7 * [DOWN],  # 13 moves
+    "50": 7 * [RIGHT] + 7 * [DOWN],  # 14 moves
+    "74": 8 * [RIGHT] + 9 * [DOWN],  # 17 moves
+    "124": 9 * [RIGHT] + 10 * [DOWN],  # 19 moves
+}
+
 EPISODES_PER_POLICY = 50
 
 
-env = mo_gym.make("left-right-dst-v0", render_mode=None)
+# env = mo_gym.make("left-right-dst-v0", render_mode=None)
+env = mo_gym.make("deep-sea-treasure-v0", render_mode="human", dst_map=CONCAVE_MAP)
 
 # policy_disc_returns: dict[str, npt.NDArray] = {}
 
@@ -68,11 +84,11 @@ def collect_trajectory(policy: list[int]) -> tuple[list, list, npt.NDArray]:
     return states, actions, disc_return
 
 
-for i in range(len(OPTIMAL_POLICIES)):
+for i in range(len(OPTIMAL_POLICIES_DST_CONCAVE)):
     POLICY_ID = i
-    policy = list(OPTIMAL_POLICIES.values())[POLICY_ID]
+    policy = list(OPTIMAL_POLICIES_DST_CONCAVE.values())[POLICY_ID]
     states, actions, disc_return = collect_trajectory(policy)
-    with open(f"trajectories/left_right_dst/left_right_dst_{POLICY_ID}.json", "w") as f:
+    with open(f"trajectories/dst_concave/dst_{POLICY_ID}.json", "w") as f:
         json.dump(
             {"return": disc_return.tolist(), "trajectories": [[states, actions]] * EPISODES_PER_POLICY},
             f,
