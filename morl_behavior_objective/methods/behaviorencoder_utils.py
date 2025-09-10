@@ -23,7 +23,7 @@ from sklearn.preprocessing import (
     QuantileTransformer, PowerTransformer, Normalizer
 )
 from sklearn.covariance import LedoitWolf
-from scipy.stats import chi2
+from scipy.stats import chi2, spearmanr
 import sklearn.calibration as skcal
 from sklearn.metrics import pairwise_distances
 from collections import Counter
@@ -1303,3 +1303,64 @@ def compute_mode_counts(num_trajs, num_modes, ratio):
     # Adjust last count to ensure sum == num_trajs
     counts[-1] += num_trajs - sum(counts)
     return counts
+
+def mle_intrinsic_dim(X, k=10):
+    # Levina & Bickel (2005) MLE intrinsic dim estimator (k nearest neighbours)
+    from sklearn.neighbors import NearestNeighbors
+    import numpy as _np
+    n, d = X.shape
+    k = min(max(3, k), n-1)
+    nbrs = NearestNeighbors(n_neighbors=k+1).fit(X)
+    distances = nbrs.kneighbors(X, return_distance=True)[0][:, 1:]
+    # distances shape (n, k)
+    logs = _np.log(distances[:, -1][:, None] / distances[:, :-1])
+    with _np.errstate(divide='ignore', invalid='ignore'):
+        m = _np.nanmean(logs, axis=1)
+    m = m[_np.isfinite(m)]
+    if len(m) == 0:
+        return float('nan')
+    inv = 1.0 / (_np.mean(m) + 1e-12)
+    return float(inv)
+
+def knn_overlap(A, B, k=5):
+    from sklearn.neighbors import NearestNeighbors
+    import numpy as _np
+    n = A.shape[0]
+    k = min(k, n-1)
+    nnA = NearestNeighbors(n_neighbors=k+1).fit(A).kneighbors(return_distance=False)[:, 1:]
+    nnB = NearestNeighbors(n_neighbors=k+1).fit(B).kneighbors(return_distance=False)[:, 1:]
+    overlaps = []
+    for i in range(n):
+        setA = set(nnA[i])
+        setB = set(nnB[i])
+        overlaps.append(len(setA & setB) / float(k))
+    return float(_np.mean(overlaps)), _np.percentile(_np.array(overlaps), [25, 50, 75])
+
+def mantel_permutation_test_two_sided(D1, D2, perms=1000, seed=0,image_dir="./images", E=None):
+    rng = np.random.default_rng(seed)
+    mask_local = np.triu_indices_from(D1, k=1)
+    x = D1[mask_local]
+    y = D2[mask_local]
+    r_obs = spearmanr(x, y).correlation
+    n = D1.shape[0]
+    perm_rs = np.empty(perms, dtype=float)
+    for i in range(perms):
+        perm = rng.permutation(n)
+        D2p = D2[perm][:, perm]
+        perm_rs[i] = spearmanr(x, D2p[mask_local]).correlation
+    p_two = (np.sum(np.abs(perm_rs) >= abs(r_obs)) + 1) / (perms + 1)
+    # histogram
+    try:
+        plt.figure(figsize=(4.5,3.2))
+        sns.histplot(perm_rs, bins=40, color='gray', alpha=0.8)
+        plt.axvline(r_obs, color='red', linestyle='--', label=f"obs r={r_obs:.3f}")
+        plt.axvline(-abs(r_obs), color='red', linestyle=':')
+        plt.axvline(abs(r_obs), color='red', linestyle=':')
+        plt.xlabel('Permutation Spearman r')
+        plt.ylabel('Count')
+        plt.legend()
+        mantel_hist_path = os.path.join(image_dir, f'mantel_perm_hist_embdim{E.shape[1]}.pdf')
+        plt.tight_layout(); plt.savefig(mantel_hist_path); plt.close()
+    except Exception:
+        mantel_hist_path = None
+    return r_obs, p_two, perm_rs.tolist(), mantel_hist_path
