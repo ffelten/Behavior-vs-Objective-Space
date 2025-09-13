@@ -89,33 +89,25 @@ def setup_parser():
     arg_env.add_argument("-T2D","--Traj2d", help="Apply the selected algorithm to the Traj2d environment",action="store_true")
     arg_env.add_argument("-Rv4","--Reacherv4", help="Apply the selected algorithm to the Reacher-v4 environment",action="store_true")
     arg_env.add_argument("-Pv4","--Pusherv4", help="Apply the selected algorithm to the Pusher-v4 environment",action="store_true")
-    arg_env.add_argument("-Hv4","--Humanoidv4", help="Apply the selected algorithm to the Humanoid-v4 environment",action="store_true")
-    arg_env.add_argument("-W2D","--Walker2dv4", help="Apply the selected algorithm to the Walker2d-v4 environment",action="store_true")
     arg_env.add_argument("-DST","--DeepSeaTreasure", help="Apply the selected algorithm to the DeepSeaTreasure environment",action="store_true")
+    arg_env.add_argument("-DSTC","--DeepSeaTreasureConcave", help="Apply the selected algorithm to the DeepSeaTreasureConcave environment",action="store_true")
 
     arg_alg = parser.add_argument_group('Unseen Split Selection')
     arg_alg.add_argument("-split","--use_seen_unseen_split", action="store_true", 
                     help="Use seen-unseen split for training. If not set, train on the entire dataset.")
     arg_alg.add_argument("-nUnModes","--num_unseen_modes", type=int, default=1, help="Number of unseen modes in the unseen split for the dataset.")
 
-    arg_irl = parser.add_argument_group('IRL Selection') #not really needed here
-    arg_irl.add_argument("-gail","--GAIL", help="Run GAIL IRL",action="store_true")
-    arg_irl.add_argument("-sqil","--SQIL", help="Run SQIL IRL",action="store_true")
-    arg_irl.add_argument("-airl","--AIRL", help="Run AIRL IRL",action="store_true")
-
     arg_hyp = parser.add_argument_group('Settings') 
     arg_hyp.add_argument('-nT','--num_trajs', type=int,default=100,help='int: Number of expert trajectories to generate')
     arg_hyp.add_argument('-seed','--seed', type=int,default=0,help='int: Random seed for reproducibility') 
     arg_hyp.add_argument('--ratio', type=int, default=1,help="Ratio for splitting trajectories between modes. 1 uniform 3 first gets most last gets least, etc.")
     arg_hyp.add_argument('--embedding_strategy', type=str, default='cls_only', choices=['cls_only', 'hybrid','goal_oriented'], help='Strategy for creating the final trajectory embedding for clustering.')
+    arg_hyp.add_argument('--diagnostics', action="store_true", help="Run diagnostic checks on the trajectory embeddings.")
 
     arg_vis = parser.add_argument_group('Visualization')
-    arg_vis.add_argument('-vA','--visualize_attention', help='Visualize the interaction and aggregated attention',action="store_true")
     arg_vis.add_argument('-vS','--visualize_scalers', help='Visualize the effect of different scalers on the state space',action="store_true")
     arg_vis.add_argument('-vO','--visualize_original', help='Visualize the original state space',action="store_true")
     arg_vis.add_argument('-vC','--visualize_clusters', help='Visualize the clusters',action="store_true")
-    arg_vis.add_argument('-vT','--visualize_transformer', help='Visualize the transformer attention layer',action="store_true")
-    arg_vis.add_argument('-vG','--visualize_graphs', help='Visualize the cluster quality graphs',action="store_true")
     arg_vis.add_argument('-r','--render', help='Render the environment',action="store_true",default=False)
     return parser
 
@@ -132,12 +124,10 @@ def main():
         unseen_modes = args.num_unseen_modes
         K = 6-unseen_modes if args.use_seen_unseen_split else 6
         K_known = 6
-    elif args.Humanoidv4 or args.Walker2dv4:
-        K = 2 if args.use_seen_unseen_split else 3
-        unseen_modes = 1
-        K_known = 3
     elif args.DeepSeaTreasure:
         K = 6
+    elif args.DeepSeaTreasureConcave:
+        K = 10
     else:
         raise ValueError("No available environment selected. Please select either --Two Lakes Fishing (-F), --Traj2d(-T2D), --Reacher-v4(-Rv4) or --Pusher-v4(-Pv4).")
 
@@ -148,12 +138,14 @@ def main():
     saving = False
     num_trajs = args.num_trajs
 
+    diagnostics = args.diagnostics
+
     embedding_strategy_code = "CLS" if args.embedding_strategy == "cls_only" else "HYB" if args.embedding_strategy == "hybrid" else "GO" if args.embedding_strategy == "goal_oriented" else "UNK"
     training_code = "SPLIT" if args.use_seen_unseen_split else "FULL"
 
-    env_name =  "Traj2d" if args.Traj2d else "Reacher-v4" if args.Reacherv4 else "Pusher-v4" if args.Pusherv4 else "Humanoid-v4" if args.Humanoidv4 else "Walker2d-v4" if args.Walker2dv4 else "DeepSeaTreasure" if args.DeepSeaTreasure else "Unknown"
-    env_id =  "Traj2d" if args.Traj2d else "Reacher-v4" if args.Reacherv4 else "Pusher-v4" if args.Pusherv4 else "Humanoid-v4" if args.Humanoidv4 else "Walker2d-v4" if args.Walker2dv4 else "UnknownEnv"
-    env_code = "T2D" if args.Traj2d else "Rv4" if args.Reacherv4 else "Pv4" if args.Pusherv4 else "Hv4" if args.Humanoidv4 else "W2D" if args.Walker2dv4 else "DST" if args.DeepSeaTreasure else "UNK"
+    env_name =  "Traj2d" if args.Traj2d else "Reacher-v4" if args.Reacherv4 else "Pusher-v4" if args.Pusherv4 else "DeepSeaTreasure" if args.DeepSeaTreasure else "DeepSeaTreasureConcave" if args.DeepSeaTreasureConcave else "Unknown"
+    env_id =  "Traj2d" if args.Traj2d else "Reacher-v4" if args.Reacherv4 else "Pusher-v4" if args.Pusherv4 else "UnknownEnv"
+    env_code = "T2D" if args.Traj2d else "Rv4" if args.Reacherv4 else "Pv4" if args.Pusherv4 else "DST" if args.DeepSeaTreasure else "DSTC" if args.DeepSeaTreasureConcave else "UNK"
 
     print(f"*** CoMIIRL approach on {env_name} ***")
 
@@ -175,6 +167,8 @@ def main():
     ]
 
     trajectory_manager = {}
+    # Initialize optional objective features container used by diagnostics
+    obj_feats_from_json = None
 
     if args.Traj2d or args.Reacherv4 or args.Pusherv4:
         trajectories_directory_path = "morl_behavior_objective/old_expert_trajectories/"
@@ -330,11 +324,12 @@ def main():
         
         trajectories = []
         true_labels = []
+        obj_feats_list = []
         for i in range(num_policies):
             file_path = os.path.join(trajectories_directory_path, f"{name_env}_{i}.json")
             with open(file_path, 'r') as f:
                 data = json.load(f)
-            
+            ret_vec = data.get('return', None)
             for states, actions in data['trajectories']:
                 # The trajectories from JSON are lists of lists, convert to numpy arrays
                 obs_list = list(states)
@@ -345,8 +340,59 @@ def main():
                 # Create a Trajectory object. infos and terminal are set to defaults.
                 trajectories.append(Trajectory(obs=obs, acts=acts, infos=None, terminal=True))
                 true_labels.append(i)
+                if ret_vec is not None:
+                    obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
+                else:
+                    obj_feats_list.append(None)
 
         true_labels = np.array(true_labels)
+        if len(obj_feats_list) == len(trajectories) and all(x is not None for x in obj_feats_list):
+            obj_feats_from_json = np.vstack(obj_feats_list).astype(np.float64)
+        else:
+            obj_feats_from_json = None
+        # It will pad trajectories since they have different lengths and prepare them for the model.
+        all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, trajectories, true_labels)
+
+        input_coord_dims = trajectories[0].obs.shape[1] if len(trajectories) > 0 and trajectories[0].obs.ndim > 1 else 1
+        num_actions = trajectories[0].acts.shape[1] if len(trajectories) > 0 and trajectories[0].acts.ndim > 1 else 1
+        num_trajs = len(trajectories)
+        K = len(np.unique(true_labels))
+        print(f"Loaded {num_trajs} expert trajectories for {name_env} with {K} modes.")
+
+    elif args.DeepSeaTreasureConcave:
+        name_env = "dst_concave"
+        trajectories_directory_path = f"trajectories/{name_env}/"
+        num_policies = K
+        env_id = "deep-sea-treasure-v0"
+
+        trajectories = []
+        true_labels = []
+        obj_feats_list = []
+        for i in range(num_policies):
+            file_path = os.path.join(trajectories_directory_path, f"dst_{i}.json")
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            ret_vec = data.get('return', None)
+            for states, actions in data['trajectories']:
+                # The trajectories from JSON are lists of lists, convert to numpy arrays
+                obs_list = list(states)
+                obs_list.append(states[-1]) # Repeat the last state
+                obs = np.array(obs_list, dtype=np.float32)
+                acts = np.array(actions, dtype=np.float32)
+                
+                # Create a Trajectory object. infos and terminal are set to defaults.
+                trajectories.append(Trajectory(obs=obs, acts=acts, infos=None, terminal=True))
+                true_labels.append(i)
+                if ret_vec is not None:
+                    obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
+                else:
+                    obj_feats_list.append(None)
+
+        true_labels = np.array(true_labels)
+        if len(obj_feats_list) == len(trajectories) and all(x is not None for x in obj_feats_list):
+            obj_feats_from_json = np.vstack(obj_feats_list).astype(np.float64)
+        else:
+            obj_feats_from_json = None
 
         # It will pad trajectories since they have different lengths and prepare them for the model.
         all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, trajectories, true_labels)
@@ -360,7 +406,7 @@ def main():
     else:
         raise ValueError("No available environment selected. Please select either --Two Lakes Fishing (-F), --Traj2d(-T2D), --Reacher-v4(-Rv4) or --Pusher-v4(-Pv4) or --Humanoidv4(-Hv4) or --Walker2dv4(-Wv4)")
 
-    if not args.DeepSeaTreasure:
+    if not args.DeepSeaTreasure and not args.DeepSeaTreasureConcave:
         print("--- Preparing State-Action Tensors")
         all_states,all_actions,all_masks,all_labels,max_len = prepare_sa_trajectories(env_id,trajectories,true_labels)
         all_states_online,all_actions_online,all_masks_online,all_labels_online,max_len_online = prepare_sa_trajectories(env_id,unseen_trajectories_for_online,true_labels_online)
@@ -477,25 +523,25 @@ def main():
     
     ### transformer hyperparameters
 
-    tr_lr = 0.0001 if args.Traj2d else 0.0001 if args.Reacherv4 else 0.0001 if args.Pusherv4 else 0.0001 if args.DeepSeaTreasure else 0.0001
+    tr_lr = 0.0001 if args.Traj2d else 0.0001 if args.Reacherv4 else 0.0001 if args.Pusherv4 else 0.0001 if args.DeepSeaTreasure else 0.0001 if args.DeepSeaTreasureConcave else 0.0001
     input_channels = obs_shape[0]
-    
-    emb_dim =  12 if args.Traj2d else 32 if args.Reacherv4 else 32 if args.Pusherv4 else 32 if args.Walker2dv4 else 64 if args.Humanoidv4 else 3 if args.DeepSeaTreasure else 4
+
+    emb_dim =  12 if args.Traj2d else 32 if args.Reacherv4 else 32 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 4
     cnn_output_dim = emb_dim
 
-    num_heads = 4 if args.Traj2d else 4 if args.Reacherv4 else 4 if args.Pusherv4 else 4 if args.Walker2dv4 else 4 if args.Humanoidv4 else 3 if args.DeepSeaTreasure else 4
-    nlayers = 2 if args.Traj2d else 2 if args.Reacherv4 else 2 if args.Pusherv4 else 2 if args.Walker2dv4 else 2 if args.Humanoidv4 else 1 if args.DeepSeaTreasure else 2
-    d_hid = 1024 if args.Traj2d else 1024 if args.Reacherv4 else 1024 if args.Pusherv4 else 1024 if args.Walker2dv4 else 1024 if args.Humanoidv4 else 32 if args.DeepSeaTreasure else 1024
-    loader_batch = 64 if args.Traj2d else 64 if args.Reacherv4 else 32 if args.Pusherv4 else 64 if args.Walker2dv4 else 64 if args.Humanoidv4 else 32
+    num_heads = 4 if args.Traj2d else 4 if args.Reacherv4 else 4 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 4
+    nlayers = 2 if args.Traj2d else 2 if args.Reacherv4 else 2 if args.Pusherv4 else 1 if args.DeepSeaTreasure else 1 if args.DeepSeaTreasureConcave else 2
+    d_hid = 1024 if args.Traj2d else 1024 if args.Reacherv4 else 1024 if args.Pusherv4 else 32 if args.DeepSeaTreasure else 32 if args.DeepSeaTreasureConcave else 1024
+    loader_batch = 64 if args.Traj2d else 64 if args.Reacherv4 else 32 if args.Pusherv4 else 32
     val_bptt = 8
     test_bptt = 1
-    dropout = 0.1 if args.Traj2d else 0.1 if args.Reacherv4 else 0.1 if args.Pusherv4 else 0.1 if args.Walker2dv4 else 0.1 if args.Humanoidv4 else 0.1
+    dropout = 0.1 if args.Traj2d else 0.1 if args.Reacherv4 else 0.1 if args.Pusherv4 else 0.1
 
     #Fourier feature encoding, - gaussian mapping values
-    gaussian_m_state = 64 if args.Traj2d else 512 if args.Reacherv4 else 1024 if args.Pusherv4 else 1024 if args.Walker2dv4 else 1024 if args.Humanoidv4 else 64 #bigger m -> better kernel approximation and cross-dim mixing
-    gaussian_m_action = 32 if args.Traj2d else 256 if args.Reacherv4 else 512 if args.Pusherv4 else 512 if args.Walker2dv4 else 512 if args.Humanoidv4 else 32
-    gaussian_sigma_state = 10 if args.Traj2d else 5 if args.Reacherv4 else 5 if args.Pusherv4 else 5 if args.Walker2dv4 else 5 if args.Humanoidv4 else 10 #smaller -> high frequency, larger -> smoother features
-    gaussian_sigma_action = 10 if args.Traj2d else 5 if args.Reacherv4 else 5 if args.Pusherv4 else 5 if args.Walker2dv4 else 5 if args.Humanoidv4 else 10 #smaller -> high frequency, larger -> smoother features
+    gaussian_m_state = 64 if args.Traj2d else 512 if args.Reacherv4 else 1024 if args.Pusherv4 else 64 #bigger m -> better kernel approximation and cross-dim mixing
+    gaussian_m_action = 32 if args.Traj2d else 256 if args.Reacherv4 else 512 if args.Pusherv4 else 32
+    gaussian_sigma_state = 10 if args.Traj2d else 5 if args.Reacherv4 else 5 if args.Pusherv4 else 10 #smaller -> high frequency, larger -> smoother features
+    gaussian_sigma_action = 10 if args.Traj2d else 5 if args.Reacherv4 else 5 if args.Pusherv4 else 10 #smaller -> high frequency, larger -> smoother features
 
     training_beta = 0.5 if env_id == "Reacherv4"  else 0.5 if args.DeepSeaTreasure else 0.5 #beta for contrastive
     training_gamma =  1.0 if env_id == "Reacherv4" else 1.0 if args.DeepSeaTreasure else 1.0 #gamma for infomax
@@ -612,12 +658,6 @@ def main():
                 "tab:orange": "Mode 5",
                 "y": "???"
             }
-    elif args.Humanoidv4 or args.Walker2dv4:
-        color_label_mapping = {
-            "tab:blue": "Mode 0",
-            "tab:red": "Mode 1",
-            "tab:green": "Mode 2",
-        }
     elif args.DeepSeaTreasure:
         policy_names = ["7_left", "6_right", "25_left", "24_right", "120_left", "124_right"]
         label_colors = {
@@ -626,6 +666,12 @@ def main():
             4: "darkblue", 5: "darkred"
         }
         label_map = {i: name for i, name in enumerate(policy_names)}
+    elif args.DeepSeaTreasureConcave:
+        num_policies = K
+        # Create a color gradient from light blue to dark red for 10 policies
+        colors = sns.blend_palette(["lightblue", "darkred"], n_colors=num_policies)
+        label_colors = {i: colors[i] for i in range(num_policies)}
+        label_map = {i: f"Mode {i}" for i in range(num_policies)}
     else:
         label_colors = {
             0: "lightblue", 1: "lightcoral",
@@ -638,7 +684,7 @@ def main():
             random_state=SEED,
             n_neighbors=100,
             min_dist=0.99,
-            n_components=2,
+            n_components=2 if emb_dim != 3 else 3,
             metric='cosine',
         )
 
@@ -670,8 +716,8 @@ def main():
         print(f"Saved raw 3D embedding plot to {image_filename}")
         plt.show()
 
-    # --- Simple UMAP Visualization with True Labels ---
-    if args.visualize_clusters:
+    # --- Simple UMAP-TSNE Visualization with True Labels ---
+    else:
         print("\n--- Visualizing UMAP with True Labels ---")
         fig = plt.figure(figsize=(10, 8))
         
@@ -725,242 +771,453 @@ def main():
 
         plt.show()
 
-    print('\n--- Running embedding / objective-space diagnostics ---')
-    try:
-        E = tj_concatenations_seen.astype(np.float64)
-    except Exception:
-        E = np.array(tj_concatenations_seen, dtype=np.float64)
 
-    
-    Obj_feats = None
-
-    # Build a small pseudo-objective that encodes the known Pareto-close pairs
-    # mapping: 0=7_left,1=6_right (close), 2=25_left,3=24_right (close), 4=120_left,5=124_right (close)
-    if Obj_feats is None:
+    if diagnostics:
+        print('\n--- Running embedding / objective-space diagnostics ---')
         try:
-            pair_positions = {0: 0.00, 1: 0.05, 2: 2.00, 3: 2.05, 4: 4.00, 5: 4.05}
-            Obj_feats = np.array([pair_positions[int(lbl)] for lbl in tj_embeddings_seen_true_labels]).reshape(-1, 1)
-            print('Objective features: built pseudo-objective from known left-right pairs (pairs are close).')
+            E = tj_concatenations_seen.astype(np.float64)
         except Exception:
-            # Last resort: use flattened observed states if available
+            E = np.array(tj_concatenations_seen, dtype=np.float64)
+
+        
+        Obj_feats = None
+
+        if obj_feats_from_json is not None and len(obj_feats_from_json) == E.shape[0]:
+            Obj_feats = np.array(obj_feats_from_json, dtype=np.float64)
+            print('Objective features: loaded per-trajectory returns from JSON.')
+        else:
             try:
-                Obj_feats = traj_flat_seen.astype(np.float64)
-                print('Objective features: using flattened state vectors as fallback.')
+                pair_positions = {0: 0.00, 1: 0.05, 2: 2.00, 3: 2.05, 4: 4.00, 5: 4.05}
+                Obj_feats = np.array([pair_positions[int(lbl)] for lbl in tj_embeddings_seen_true_labels]).reshape(-1, 1)
+                print('Objective features: built pseudo-objective from known left-right pairs (pairs are close).')
             except Exception:
-                Obj_feats = np.array(tj_embeddings_seen_true_labels).reshape(-1, 1)
-                print('Objective features: fallback to true labels (proxy).')
+                # Last resort: use flattened observed states if available
+                try:
+                    Obj_feats = traj_flat_seen.astype(np.float64)
+                    print('Objective features: using flattened state vectors as fallback.')
+                except Exception:
+                    Obj_feats = np.array(tj_embeddings_seen_true_labels).reshape(-1, 1)
+                    print('Objective features: fallback to true labels (proxy).')
 
-    # PCA + participation ratio
-    pca = PCA(n_components=min(E.shape[1], E.shape[0]-1))
-    pca.fit(E)
-    explained = pca.explained_variance_ratio_
-    cum = explained.cumsum()
-    eigvals = pca.explained_variance_
-    participation_ratio = (eigvals.sum()**2) / (eigvals**2).sum() if eigvals.size > 0 else float('nan')
+        # PCA + participation ratio
+        pca = PCA(n_components=min(E.shape[1], E.shape[0]-1))
+        pca.fit(E)
+        explained = pca.explained_variance_ratio_
+        cum = explained.cumsum()
+        eigvals = pca.explained_variance_
+        participation_ratio = (eigvals.sum()**2) / (eigvals**2).sum() if eigvals.size > 0 else float('nan')
 
-    # Intrinsic dim (MLE) — add tiny jitter and use adaptive k to avoid NaNs from duplicates
-    try:
-        E_jitter = E + 1e-9 * np.random.randn(*E.shape)
-        k_mle = max(3, min(10, E.shape[0] // 4))
-        id_mle = mle_intrinsic_dim(E_jitter, k=k_mle)
-    except Exception:
-        id_mle = float('nan'); k_mle = None
-
-    # Clustering / separability
-    unique_true = np.unique(tj_embeddings_seen_true_labels)
-    K_est = len(unique_true)
-    try:
-        km = KMeans(n_clusters=max(1, K_est), random_state=0).fit(E)
-        ari = adjusted_rand_score(tj_embeddings_seen_true_labels, km.labels_)
-        nmi = normalized_mutual_info_score(tj_embeddings_seen_true_labels, km.labels_)
-    except Exception:
-        ari = float('nan'); nmi = float('nan')
-    try:
-        sil_true = silhouette_score(E, tj_embeddings_seen_true_labels) if len(unique_true) > 1 else float('nan')
-    except Exception:
-        sil_true = float('nan')
-
-    # Trustworthiness (local neighborhood preservation) between objective and embedding spaces
-    try:
-        tw = trustworthiness(Obj_feats, E, n_neighbors=5)
-    except Exception:
-        tw = float('nan')
-
-    # Pairwise distance correlations
-    D_emb = pairwise_distances(E, metric='euclidean')
-    D_obj = pairwise_distances(Obj_feats, metric='euclidean')
-    mask = np.triu_indices_from(D_emb, k=1)
-    try:
-        rho, pval = spearmanr(D_emb[mask], D_obj[mask])
-    except Exception:
-        rho, pval = float('nan'), float('nan')
-
-    # --- Within-pair vs Between-pair embedding distances (direct test of your DST pairs) ---
-    try:
-        pairs = {(0, 1), (2, 3), (4, 5)}
-        within = []
-        between = []
-        n = D_emb.shape[0]
-        for i in range(n):
-            for j in range(i+1, n):
-                a = int(tj_embeddings_seen_true_labels[i])
-                b = int(tj_embeddings_seen_true_labels[j])
-                if (a, b) in pairs or (b, a) in pairs:
-                    within.append(D_emb[i, j])
-                else:
-                    between.append(D_emb[i, j])
-        mean_within = float(np.mean(within)) if len(within) > 0 else float('nan')
-        mean_between = float(np.mean(between)) if len(between) > 0 else float('nan')
-        # boxplot
+        # Intrinsic dim (MLE) — add tiny jitter and use adaptive k to avoid NaNs from duplicates
         try:
-            fig, ax = plt.subplots(figsize=(4, 4))
-            ax.boxplot([within, between], labels=['within-pair', 'between-pair'])
-            ax.set_ylabel('Embedding distance')
-            ax.set_title(f'Within vs Between pair distances (emb_dim={E.shape[1]})')
-            img_path = os.path.join(image_dir, f'within_between_embdist_embdim{E.shape[1]}.pdf')
-            fig.tight_layout()
-            plt.savefig(img_path, bbox_inches='tight')
-            plt.close(fig)
+            E_jitter = E + 1e-9 * np.random.randn(*E.shape)
+            k_mle = max(3, min(10, E.shape[0] // 4))
+            id_mle = mle_intrinsic_dim(E_jitter, k=k_mle)
         except Exception:
+            id_mle = float('nan'); k_mle = None
+
+        # Clustering / separability
+        unique_true = np.unique(tj_embeddings_seen_true_labels)
+        K_est = len(unique_true)
+        try:
+            km = KMeans(n_clusters=max(1, K_est), random_state=0).fit(E)
+            ari = adjusted_rand_score(tj_embeddings_seen_true_labels, km.labels_)
+            nmi = normalized_mutual_info_score(tj_embeddings_seen_true_labels, km.labels_)
+        except Exception:
+            ari = float('nan'); nmi = float('nan')
+        try:
+            sil_true = silhouette_score(E, tj_embeddings_seen_true_labels) if len(unique_true) > 1 else float('nan')
+        except Exception:
+            sil_true = float('nan')
+
+        # Trustworthiness (local neighborhood preservation) between objective and embedding spaces
+        try:
+            tw = trustworthiness(Obj_feats, E, n_neighbors=5)
+        except Exception:
+            tw = float('nan')
+
+        # Pairwise distance correlations
+        D_emb = pairwise_distances(E, metric='euclidean')
+        D_obj = pairwise_distances(Obj_feats, metric='euclidean')
+
+        # Optional: standardize Obj_feats before computing distances (uncomment if desired)
+        # _sc = StandardScaler()
+        # Obj_feats_std = _sc.fit_transform(Obj_feats)
+        # D_obj = pairwise_distances(Obj_feats_std, metric='euclidean')
+
+        mask = np.triu_indices_from(D_emb, k=1)
+        try:
+            rho, pval = spearmanr(D_emb[mask], D_obj[mask])
+        except Exception:
+            rho, pval = float('nan'), float('nan')
+
+        # --- Within-pair vs Between-pair distances: only meaningful for left-right DST ---
+        if args.DeepSeaTreasure:
+            try:
+                pairs = {(0, 1), (2, 3), (4, 5)}
+                within = []
+                between = []
+                n = D_emb.shape[0]
+                for i in range(n):
+                    for j in range(i+1, n):
+                        a = int(tj_embeddings_seen_true_labels[i])
+                        b = int(tj_embeddings_seen_true_labels[j])
+                        if (a, b) in pairs or (b, a) in pairs:
+                            within.append(D_emb[i, j])
+                        else:
+                            between.append(D_emb[i, j])
+                mean_within = float(np.mean(within)) if len(within) > 0 else float('nan')
+                mean_between = float(np.mean(between)) if len(between) > 0 else float('nan')
+                # boxplot
+                try:
+                    fig, ax = plt.subplots(figsize=(4, 4))
+                    ax.boxplot([within, between], labels=['within-pair', 'between-pair'])
+                    ax.set_ylabel('Embedding distance')
+                    ax.set_title(f'Within vs Between pair distances (emb_dim={E.shape[1]})')
+                    img_path = os.path.join(image_dir, f'within_between_embdist_embdim{E.shape[1]}.pdf')
+                    fig.tight_layout()
+                    plt.savefig(img_path, bbox_inches='tight')
+                    plt.close(fig)
+                except Exception:
+                    img_path = None
+            except Exception:
+                mean_within = float('nan')
+                mean_between = float('nan')
+                img_path = None
+        else:
+            mean_within = float('nan')
+            mean_between = float('nan')
             img_path = None
-    except Exception:
-        mean_within = float('nan')
-        mean_between = float('nan')
-        img_path = None
 
-    # Mantel-like permutation test (two-sided) + optional histogram
+        # Mantel-like permutation test (two-sided) + optional histogram
 
-    try:
-        mantel_r, mantel_p, mantel_perm_rs, mantel_hist_path = mantel_permutation_test_two_sided(D_emb, D_obj, perms=1000, seed=SEED,image_dir=image_dir, E=E)
-    except Exception:
-        mantel_r, mantel_p, mantel_perm_rs, mantel_hist_path = float('nan'), float('nan'), [], None
+        try:
+            mantel_r, mantel_p, mantel_perm_rs, mantel_hist_path = mantel_permutation_test_two_sided(D_emb, D_obj, perms=1000, seed=SEED,image_dir=image_dir, E=E)
+        except Exception:
+            mantel_r, mantel_p, mantel_perm_rs, mantel_hist_path = float('nan'), float('nan'), [], None
 
-    # kNN overlap (global)
-    try:
-        mean_ov, quartiles = knn_overlap(Obj_feats, E, k=5)
-    except Exception:
-        mean_ov, quartiles = float('nan'), [float('nan')]*3
+        # kNN overlap (global)
+        try:
+            mean_ov, quartiles = knn_overlap(Obj_feats, E, k=5)
+        except Exception:
+            mean_ov, quartiles = float('nan'), [float('nan')]*3
 
     # Pareto-restricted kNN overlap: nearest neighbors in Obj_feats vs E (local test)
-    try:
-        k = min(5, E.shape[0]-1)
-        nn_obj = np.argsort(D_obj, axis=1)[:, 1:k+1]
-        nn_emb = np.argsort(D_emb, axis=1)[:, 1:k+1]
-        overlaps = [len(set(nn_obj[i]) & set(nn_emb[i])) / float(k) for i in range(E.shape[0])]
-        pareto_knn_mean = float(np.mean(overlaps))
-    except Exception:
-        pareto_knn_mean = float('nan')
+        try:
+            k = min(5, E.shape[0]-1)
+            nn_obj = np.argsort(D_obj, axis=1)[:, 1:k+1]
+            nn_emb = np.argsort(D_emb, axis=1)[:, 1:k+1]
+            overlaps = [len(set(nn_obj[i]) & set(nn_emb[i])) / float(k) for i in range(E.shape[0])]
+            pareto_knn_mean = float(np.mean(overlaps))
+        except Exception:
+            pareto_knn_mean = float('nan')
 
-    # Lipschitz histogram diagnostics (local sensitivity both directions)
-    try:
-        obj_for_lip = Obj_feats if Obj_feats.ndim == 2 else Obj_feats.reshape(-1,1)
-        k_lip = min(5, obj_for_lip.shape[0]-1) if obj_for_lip.shape[0] > 1 else 1
-        eps = 1e-12
-        if k_lip >= 1:
-            # objective space neighbors
-            nn_obj = NearestNeighbors(n_neighbors=k_lip+1).fit(obj_for_lip)
-            dist_obj_nn, idx_obj_nn = nn_obj.kneighbors(obj_for_lip)
-            dist_obj_nn = dist_obj_nn[:,1:]
-            idx_obj_nn = idx_obj_nn[:,1:]
-            emb_d_objnbr = np.linalg.norm(E[:,None,:]-E[idx_obj_nn], axis=2)
-            ratios_obj2emb = emb_d_objnbr/(dist_obj_nn+eps)
-            local_med_obj2emb = np.median(ratios_obj2emb, axis=1)
-            local_max_obj2emb = np.max(ratios_obj2emb, axis=1)
-            # embedding space neighbors
-            nn_emb = NearestNeighbors(n_neighbors=k_lip+1).fit(E)
-            dist_emb_nn, idx_emb_nn = nn_emb.kneighbors(E)
-            dist_emb_nn = dist_emb_nn[:,1:]
-            idx_emb_nn = idx_emb_nn[:,1:]
-            obj_d_embnbr = np.linalg.norm(obj_for_lip[:,None,:]-obj_for_lip[idx_emb_nn], axis=2)
-            ratios_emb2obj = obj_d_embnbr/(dist_emb_nn+eps)
-            local_med_emb2obj = np.median(ratios_emb2obj, axis=1)
-            local_max_emb2obj = np.max(ratios_emb2obj, axis=1)
-            # hist helper
-            def save_hist(data, name):
-                try:
-                    plt.figure(figsize=(5,3.2))
-                    sns.histplot(data, bins=60, stat='density', color='C0', alpha=0.8)
-                    if np.max(data) / (np.median(data)+eps) > 1e3:
-                        plt.xscale('log')
-                    plt.xlabel(name); plt.ylabel('Density')
-                    outp = os.path.join(image_dir, f'{name}_embdim{E.shape[1]}.pdf')
-                    plt.tight_layout(); plt.savefig(outp); plt.close()
-                    return outp
-                except Exception:
-                    return None
-            lip_obj2emb_med_pdf = save_hist(local_med_obj2emb, 'lip_local_med_obj2emb')
-            lip_obj2emb_max_pdf = save_hist(local_max_obj2emb, 'lip_local_max_obj2emb')
-            lip_emb2obj_med_pdf = save_hist(local_med_emb2obj, 'lip_local_med_emb2obj')
-            lip_emb2obj_max_pdf = save_hist(local_max_emb2obj, 'lip_local_max_emb2obj')
-            # summaries
-            def s(a):
-                return dict(median=float(np.median(a)), p90=float(np.percentile(a,90)), frac_gt10=float(np.mean(a>10)), max=float(np.max(a)))
-            lip_summary = {
-                'obj2emb_med': s(local_med_obj2emb),
-                'obj2emb_max': s(local_max_obj2emb),
-                'emb2obj_med': s(local_med_emb2obj),
-                'emb2obj_max': s(local_max_emb2obj),
-                'obj2emb_med_pdf': lip_obj2emb_med_pdf,
-                'obj2emb_max_pdf': lip_obj2emb_max_pdf,
-                'emb2obj_med_pdf': lip_emb2obj_med_pdf,
-                'emb2obj_max_pdf': lip_emb2obj_max_pdf,
-                'k_lip': k_lip
-            }
-        else:
+        # Lipschitz histogram diagnostics (local sensitivity both directions)
+        try:
+            obj_for_lip = Obj_feats if Obj_feats.ndim == 2 else Obj_feats.reshape(-1,1)
+            k_lip = min(5, obj_for_lip.shape[0]-1) if obj_for_lip.shape[0] > 1 else 1
+            eps = 1e-12
+            min_sep = 1e-6  # New: avoid dividing by near-zero distances
+            if k_lip >= 1:
+                # objective space neighbors
+                nn_obj = NearestNeighbors(n_neighbors=k_lip+1).fit(obj_for_lip)
+                dist_obj_nn, idx_obj_nn = nn_obj.kneighbors(obj_for_lip)
+                dist_obj_nn = dist_obj_nn[:,1:]
+                idx_obj_nn = idx_obj_nn[:,1:]
+                emb_d_objnbr = np.linalg.norm(E[:,None,:]-E[idx_obj_nn], axis=2)
+                mask_obj = dist_obj_nn > min_sep
+                ratios_obj2emb = np.full_like(emb_d_objnbr, np.nan, dtype=np.float64)
+                ratios_obj2emb[mask_obj] = emb_d_objnbr[mask_obj]/(dist_obj_nn[mask_obj]+eps)
+                local_med_obj2emb = np.nanmedian(ratios_obj2emb, axis=1)
+                local_max_obj2emb = np.nanmax(ratios_obj2emb, axis=1)
+                # embedding space neighbors
+                nn_emb = NearestNeighbors(n_neighbors=k_lip+1).fit(E)
+                dist_emb_nn, idx_emb_nn = nn_emb.kneighbors(E)
+                dist_emb_nn = dist_emb_nn[:,1:]
+                idx_emb_nn = idx_emb_nn[:,1:]
+                obj_d_embnbr = np.linalg.norm(obj_for_lip[:,None,:]-obj_for_lip[idx_emb_nn], axis=2)
+                mask_emb = dist_emb_nn > min_sep
+                ratios_emb2obj = np.full_like(obj_d_embnbr, np.nan, dtype=np.float64)
+                ratios_emb2obj[mask_emb] = obj_d_embnbr[mask_emb]/(dist_emb_nn[mask_emb]+eps)
+                local_med_emb2obj = np.nanmedian(ratios_emb2obj, axis=1)
+                local_max_emb2obj = np.nanmax(ratios_emb2obj, axis=1)
+                # hist helper
+                def save_hist(data, name):
+                    try:
+                        d = data[np.isfinite(data)]
+                        plt.figure(figsize=(5,3.2))
+                        sns.histplot(d, bins=60, stat='density', color='C0', alpha=0.8)
+                        if d.size and (np.max(d) / max(np.median(d), 1e-9) > 1e3):
+                            plt.xscale('log')
+                        plt.xlabel(name); plt.ylabel('Density')
+                        outp = os.path.join(image_dir, f'{name}_embdim{E.shape[1]}.pdf')
+                        plt.tight_layout(); plt.savefig(outp); plt.close()
+                        return outp
+                    except Exception:
+                        return None
+                lip_obj2emb_med_pdf = save_hist(local_med_obj2emb, 'lip_local_med_obj2emb')
+                lip_obj2emb_max_pdf = save_hist(local_max_obj2emb, 'lip_local_max_obj2emb')
+                lip_emb2obj_med_pdf = save_hist(local_med_emb2obj, 'lip_local_med_emb2obj')
+                lip_emb2obj_max_pdf = save_hist(local_max_emb2obj, 'lip_local_max_emb2obj')
+                # summaries
+                def s(a):
+                    d = a[np.isfinite(a)]
+                    return dict(
+                        median=float(np.median(d)) if d.size else float('nan'),
+                        p90=float(np.percentile(d,90)) if d.size else float('nan'),
+                        frac_gt10=float(np.mean(d>10)) if d.size else float('nan'),
+                        max=float(np.max(d)) if d.size else float('nan')
+                    )
+                lip_summary = {
+                    'obj2emb_med': s(local_med_obj2emb),
+                    'obj2emb_max': s(local_max_obj2emb),
+                    'emb2obj_med': s(local_med_emb2obj),
+                    'emb2obj_max': s(local_max_emb2obj),
+                    'obj2emb_med_pdf': lip_obj2emb_med_pdf,
+                    'obj2emb_max_pdf': lip_obj2emb_max_pdf,
+                    'emb2obj_med_pdf': lip_emb2obj_med_pdf,
+                    'emb2obj_max_pdf': lip_emb2obj_max_pdf,
+                    'k_lip': k_lip
+                }
+            else:
+                lip_summary = {}
+        except Exception:
             lip_summary = {}
-    except Exception:
-        lip_summary = {}
+        
+        # --- Centroid-level diagnostics (policy-level) to mitigate duplicate objectives ---
+        try:
+            labels_arr = np.asarray(tj_embeddings_seen_true_labels)
+            uniq = np.unique(labels_arr)
+            # compute centroids in embedding and objective spaces
+            E_centroids = []
+            O_centroids = []
+            counts_centroids = []
+            for lab in uniq:
+                idx = np.where(labels_arr == lab)[0]
+                if idx.size == 0:
+                    continue
+                E_centroids.append(E[idx].mean(axis=0))
+                O_centroids.append(Obj_feats[idx].mean(axis=0))
+                counts_centroids.append(idx.size)
+            E_c = np.vstack(E_centroids)
+            O_c = np.vstack(O_centroids)
+            # PCA/participation ratio on centroids (policy-level)
+            try:
+                pca_c = PCA(n_components=min(E_c.shape[1], max(1, E_c.shape[0]-1)))
+                pca_c.fit(E_c)
+                explained_c = pca_c.explained_variance_ratio_
+                cum_c = explained_c.cumsum()
+                eigvals_c = pca_c.explained_variance_
+                participation_ratio_c = (eigvals_c.sum()**2) / (eigvals_c**2).sum() if eigvals_c.size > 0 else float('nan')
+            except Exception:
+                cum_c = np.array([]); participation_ratio_c = float('nan')
+            # Intrinsic dimension (MLE) on centroids with tiny jitter and small k
+            try:
+                E_c_jitter = E_c + 1e-9 * np.random.randn(*E_c.shape)
+                k_mle_c = max(2, min(5, E_c.shape[0] - 1))
+                id_mle_c = mle_intrinsic_dim(E_c_jitter, k=k_mle_c)
+            except Exception:
+                id_mle_c = float('nan'); k_mle_c = None
+            D_emb_c = pairwise_distances(E_c, metric='euclidean')
+            D_obj_c = pairwise_distances(O_c, metric='euclidean')
+            mask_c = np.triu_indices_from(D_emb_c, k=1)
+            try:
+                rho_c, pval_c = spearmanr(D_emb_c[mask_c], D_obj_c[mask_c])
+            except Exception:
+                rho_c, pval_c = float('nan'), float('nan')
+            # two-sided Mantel on centroids, save histogram under a subdir
+            image_dir_centroids = os.path.join(image_dir, 'centroids')
+            os.makedirs(image_dir_centroids, exist_ok=True)
+            try:
+                mantel_r_c, mantel_p_c, _, mantel_hist_path_c = mantel_permutation_test_two_sided(D_emb_c, D_obj_c, perms=1000, seed=SEED, image_dir=image_dir_centroids, E=E_c)
+            except Exception:
+                mantel_r_c, mantel_p_c, mantel_hist_path_c = float('nan'), float('nan'), None
+            # Trustworthiness and kNN overlap at centroid level (objective -> embedding)
+            try:
+                tw_c = trustworthiness(O_c, E_c, n_neighbors=min(5, max(1, E_c.shape[0]-1)))
+            except Exception:
+                tw_c = float('nan')
+            try:
+                mean_ov_c, quartiles_c = knn_overlap(O_c, E_c, k=min(5, max(1, E_c.shape[0]-1)))
+            except Exception:
+                mean_ov_c, quartiles_c = float('nan'), [float('nan')]*3
+            # Pareto-like kNN overlap at centroid level
+            try:
+                k_cnn = min(5, max(1, E_c.shape[0]-1))
+                nn_obj_cnn = np.argsort(D_obj_c, axis=1)[:, 1:k_cnn+1]
+                nn_emb_cnn = np.argsort(D_emb_c, axis=1)[:, 1:k_cnn+1]
+                overlaps_c = [len(set(nn_obj_cnn[i]) & set(nn_emb_cnn[i])) / float(k_cnn) for i in range(E_c.shape[0])]
+                pareto_knn_mean_c = float(np.mean(overlaps_c)) if len(overlaps_c) else float('nan')
+            except Exception:
+                pareto_knn_mean_c = float('nan')
+            # Within-vs-between (policy-level) only for left-right DST
+            if args.DeepSeaTreasure:
+                try:
+                    pairs = {(0, 1), (2, 3), (4, 5)}
+                    # map centroid row index -> original label
+                    label_by_row = {ri: int(lab) for ri, lab in enumerate(uniq)}
+                    within_c, between_c = [], []
+                    n_c = D_emb_c.shape[0]
+                    for i in range(n_c):
+                        for j in range(i+1, n_c):
+                            a = label_by_row[i]; b = label_by_row[j]
+                            if (a, b) in pairs or (b, a) in pairs:
+                                within_c.append(D_emb_c[i, j])
+                            else:
+                                between_c.append(D_emb_c[i, j])
+                    mean_within_c = float(np.mean(within_c)) if len(within_c) > 0 else float('nan')
+                    mean_between_c = float(np.mean(between_c)) if len(between_c) > 0 else float('nan')
+                except Exception:
+                    mean_within_c, mean_between_c = float('nan'), float('nan')
+            else:
+                mean_within_c, mean_between_c = float('nan'), float('nan')
+            # Lipschitz at centroid level (use small k)
+            try:
+                k_c = min(3, E_c.shape[0]-1) if E_c.shape[0] > 1 else 1
+                eps = 1e-12
+                min_sep = 1e-6
+                if k_c >= 1 and E_c.shape[0] > 1:
+                    nn_obj_c = NearestNeighbors(n_neighbors=k_c+1).fit(O_c)
+                    dist_obj_nn_c, idx_obj_nn_c = nn_obj_c.kneighbors(O_c)
+                    dist_obj_nn_c = dist_obj_nn_c[:,1:]
+                    idx_obj_nn_c = idx_obj_nn_c[:,1:]
+                    emb_d_objnbr_c = np.linalg.norm(E_c[:,None,:]-E_c[idx_obj_nn_c], axis=2)
+                    mask_obj_c = dist_obj_nn_c > min_sep
+                    ratios_o2e_c = np.full_like(emb_d_objnbr_c, np.nan, dtype=np.float64)
+                    ratios_o2e_c[mask_obj_c] = emb_d_objnbr_c[mask_obj_c]/(dist_obj_nn_c[mask_obj_c]+eps)
+                    med_o2e_c = np.nanmedian(ratios_o2e_c, axis=1)
+                    nn_emb_c = NearestNeighbors(n_neighbors=k_c+1).fit(E_c)
+                    dist_emb_nn_c, idx_emb_nn_c = nn_emb_c.kneighbors(E_c)
+                    dist_emb_nn_c = dist_emb_nn_c[:,1:]
+                    idx_emb_nn_c = idx_emb_nn_c[:,1:]
+                    obj_d_embnbr_c = np.linalg.norm(O_c[:,None,:]-O_c[idx_emb_nn_c], axis=2)
+                    mask_emb_c = dist_emb_nn_c > min_sep
+                    ratios_e2o_c = np.full_like(obj_d_embnbr_c, np.nan, dtype=np.float64)
+                    ratios_e2o_c[mask_emb_c] = obj_d_embnbr_c[mask_emb_c]/(dist_emb_nn_c[mask_emb_c]+eps)
+                    med_e2o_c = np.nanmedian(ratios_e2o_c, axis=1)
+                    # save hists
+                    def save_hist_c(data, name):
+                        try:
+                            d = data[np.isfinite(data)]
+                            plt.figure(figsize=(5,3.2))
+                            sns.histplot(d, bins=40, stat='density', color='C1', alpha=0.8)
+                            if d.size and (np.max(d) / max(np.median(d), 1e-9) > 1e3):
+                                plt.xscale('log')
+                            outp = os.path.join(image_dir_centroids, f'{name}_embdim{E.shape[1]}.pdf')
+                            plt.tight_layout(); plt.savefig(outp); plt.close()
+                            return outp
+                        except Exception:
+                            return None
+                    lip_c_o2e_pdf = save_hist_c(med_o2e_c, 'centroids_lip_local_med_obj2emb')
+                    lip_c_e2o_pdf = save_hist_c(med_e2o_c, 'centroids_lip_local_med_emb2obj')
+                    lip_centroid = {
+                        'obj2emb_med': {
+                            'median': float(np.nanmedian(med_o2e_c)) if np.isfinite(med_o2e_c).any() else float('nan'),
+                            'p90': float(np.nanpercentile(med_o2e_c,90)) if np.isfinite(med_o2e_c).any() else float('nan'),
+                        },
+                        'emb2obj_med': {
+                            'median': float(np.nanmedian(med_e2o_c)) if np.isfinite(med_e2o_c).any() else float('nan'),
+                            'p90': float(np.nanpercentile(med_e2o_c,90)) if np.isfinite(med_e2o_c).any() else float('nan'),
+                        },
+                        'obj2emb_med_pdf': lip_c_o2e_pdf,
+                        'emb2obj_med_pdf': lip_c_e2o_pdf,
+                        'k_lip_c': k_c,
+                        'counts': counts_centroids,
+                    }
+                else:
+                    lip_centroid = {}
+            except Exception:
+                lip_centroid = {}
+        except Exception:
+            rho_c, pval_c, mantel_r_c, mantel_p_c, mantel_hist_path_c, lip_centroid = float('nan'), float('nan'), float('nan'), float('nan'), None, {}
 
-    # Print compact report
-    print(f'\nEmbedding diagnostics summary for emb_dim {E.shape[1]}:')
-    print('  PCA cumulative explained:', cum[:8])
-    print(f'  Participation ratio (effective dim) = {participation_ratio:.3f}')
-    print(f'  MLE intrinsic dim (k={k_mle}) = {id_mle:.3f}')
-    print(f'  Clustering (KMeans vs true): ARI={ari:.3f}, NMI={nmi:.3f}, Silhouette(true)={sil_true:.3f}')
-    print(f'  Trustworthiness (obj -> emb) = {tw:.3f}')
-    print(f'  Spearman(D_emb, D_obj) = {rho:.3f} (p~{pval})')
-    print(f'  Mantel (two-sided) spearman r={mantel_r:.3f}, p={mantel_p:.3f}')
-    print(f'  kNN overlap (k=5) mean={mean_ov:.3f}, quartiles={quartiles}')
-    print(f'  Within/Between means: within={mean_within:.4f}, between={mean_between:.4f}')
-    if lip_summary:
-        print('  Lipschitz obj->emb median p90 frac>10:', lip_summary['obj2emb_med']['median'], lip_summary['obj2emb_med']['p90'], lip_summary['obj2emb_med']['frac_gt10'])
-        print('  Lipschitz emb->obj median p90 frac>10:', lip_summary['emb2obj_med']['median'], lip_summary['emb2obj_med']['p90'], lip_summary['emb2obj_med']['frac_gt10'])
+        # Print compact report
+        print(f'\nEmbedding diagnostics summary for emb_dim {E.shape[1]}:')
+        print('  PCA cumulative explained:', cum[:8])
+        print(f'  Participation ratio (effective dim) = {participation_ratio:.3f}')
+        print(f'  MLE intrinsic dim (k={k_mle}) = {id_mle:.3f}')
+        print(f'  Clustering (KMeans vs true): ARI={ari:.3f}, NMI={nmi:.3f}, Silhouette(true)={sil_true:.3f}')
+        print(f'  Trustworthiness (obj -> emb) = {tw:.3f}')
+        print(f'  Spearman(D_emb, D_obj) = {rho:.3f} (p~{pval})')
+        print(f'  Mantel (two-sided) spearman r={mantel_r:.3f}, p={mantel_p:.3f}')
+        print(f'  kNN overlap (k=5) mean={mean_ov:.3f}, quartiles={quartiles}; pareto-like kNN mean={pareto_knn_mean:.3f}')
+        print(f'  Within/Between means: within={mean_within:.4f}, between={mean_between:.4f}')
+        if lip_summary:
+            print('  Lipschitz obj->emb median p90 frac>10:', lip_summary['obj2emb_med']['median'], lip_summary['obj2emb_med']['p90'], lip_summary['obj2emb_med']['frac_gt10'])
+            print('  Lipschitz emb->obj median p90 frac>10:', lip_summary['emb2obj_med']['median'], lip_summary['emb2obj_med']['p90'], lip_summary['emb2obj_med']['frac_gt10'])
+        # Centroid-level (policy-level, deduped) report
+        print('  [Policy-level deduped] PCA cumulative explained:', cum_c[:8] if 'cum_c' in locals() else [])
+        print(f'  [Policy-level deduped] Participation ratio = {participation_ratio_c:.3f}')
+        print(f'  [Policy-level deduped] MLE intrinsic dim (k={k_mle_c}) = {id_mle_c:.3f}')
+        print(f'  [Policy-level deduped] Trustworthiness (obj -> emb) = {tw_c:.3f}')
+        print(f'  [Policy-level deduped] Spearman(D_emb, D_obj) = {rho_c:.3f} (p~{pval_c})')
+        print(f'  [Policy-level deduped] Mantel r={mantel_r_c:.3f}, p={mantel_p_c:.3f}')
+        print(f'  [Policy-level deduped] kNN overlap mean={mean_ov_c:.3f}, quartiles={quartiles_c}; pareto-like kNN mean={pareto_knn_mean_c:.3f}')
+        if args.DeepSeaTreasure:
+            print(f'  [Policy-level deduped] Within/Between means: within={mean_within_c:.4f}, between={mean_between_c:.4f}')
+        if lip_centroid:
+            print('  [Policy-level deduped] Lipschitz obj->emb median,p90:', lip_centroid['obj2emb_med']['median'], lip_centroid['obj2emb_med']['p90'])
+            print('  [Policy-level deduped] Lipschitz emb->obj median,p90:', lip_centroid['emb2obj_med']['median'], lip_centroid['emb2obj_med']['p90'])
 
-    # Save to results for later CSV if desired
-    res_entry = {
-        'emb_dim': E.shape[1],
-        'participation_ratio': float(participation_ratio),
-        'id_mle': float(id_mle),
-        'ari': float(ari),
-        'nmi': float(nmi),
-        'silhouette_true': float(sil_true),
-        'trustworthiness': float(tw),
-        'spearman_dist': float(rho),
-        'spearman_p': float(pval),
-        'mantel_r': float(mantel_r),
-        'mantel_p': float(mantel_p),
-        'mantel_hist_path': mantel_hist_path,
-        'knn_overlap_mean': float(mean_ov),
-        'mean_within': mean_within,
-        'mean_between': mean_between
-    }
-    # incorporate lipschitz stats if available
-    if lip_summary:
-        for kcat, stats_dict in lip_summary.items():
-            if isinstance(stats_dict, dict) and 'median' in stats_dict:
-                for sk, val in stats_dict.items():
-                    if isinstance(val, (int,float)):
-                        res_entry[f'lip_{kcat}_{sk}'] = val
-        # add pdf paths
-        for key in ['obj2emb_med_pdf','obj2emb_max_pdf','emb2obj_med_pdf','emb2obj_max_pdf','k_lip']:
-            if key in lip_summary:
-                res_entry[f'lip_{key}'] = lip_summary[key]
-    results.append(res_entry)
+        # Save to results for later CSV if desired
+        res_entry = {
+            'emb_dim': E.shape[1],
+            'participation_ratio': float(participation_ratio),
+            'id_mle': float(id_mle),
+            'ari': float(ari),
+            'nmi': float(nmi),
+            'silhouette_true': float(sil_true),
+            'trustworthiness': float(tw),
+            'spearman_dist': float(rho),
+            'spearman_p': float(pval),
+            'mantel_r': float(mantel_r),
+            'mantel_p': float(mantel_p),
+            'mantel_hist_path': mantel_hist_path,
+            'knn_overlap_mean': float(mean_ov),
+            'pareto_knn_mean': float(pareto_knn_mean),
+            'mean_within': mean_within,
+            'mean_between': mean_between
+        }
+        # incorporate lipschitz stats if available
+        if lip_summary:
+            for kcat, stats_dict in lip_summary.items():
+                if isinstance(stats_dict, dict) and 'median' in stats_dict:
+                    for sk, val in stats_dict.items():
+                        if isinstance(val, (int,float)):
+                            res_entry[f'lip_{kcat}_{sk}'] = val
+            # add pdf paths
+            for key in ['obj2emb_med_pdf','obj2emb_max_pdf','emb2obj_med_pdf','emb2obj_max_pdf','k_lip']:
+                if key in lip_summary:
+                    res_entry[f'lip_{key}'] = lip_summary[key]
+        # add centroid-level metrics
+        res_entry.update({
+            'centroid_spearman': float(rho_c) if rho_c is not None else float('nan'),
+            'centroid_spearman_p': float(pval_c) if pval_c is not None else float('nan'),
+            'centroid_mantel_r': float(mantel_r_c) if mantel_r_c is not None else float('nan'),
+            'centroid_mantel_p': float(mantel_p_c) if mantel_p_c is not None else float('nan'),
+            'centroid_mantel_hist_path': mantel_hist_path_c,
+            'centroid_participation_ratio': float(participation_ratio_c) if 'participation_ratio_c' in locals() else float('nan'),
+            'centroid_id_mle': float(id_mle_c) if 'id_mle_c' in locals() else float('nan'),
+            'centroid_trustworthiness': float(tw_c) if 'tw_c' in locals() else float('nan'),
+            'centroid_knn_overlap_mean': float(mean_ov_c) if 'mean_ov_c' in locals() else float('nan'),
+            'centroid_pareto_knn_mean': float(pareto_knn_mean_c) if 'pareto_knn_mean_c' in locals() else float('nan'),
+            'centroid_within': mean_within_c if 'mean_within_c' in locals() else float('nan'),
+            'centroid_between': mean_between_c if 'mean_between_c' in locals() else float('nan'),
+        })
+        if lip_centroid:
+            for subk, stats in lip_centroid.items():
+                if isinstance(stats, dict) and 'median' in stats:
+                    for sk, val in stats.items():
+                        if isinstance(val, (int,float)):
+                            res_entry[f'centroid_lip_{subk}_{sk}'] = val
+            for key in ['obj2emb_med_pdf','emb2obj_med_pdf','k_lip_c']:
+                if key in lip_centroid:
+                    res_entry[f'centroid_lip_{key}'] = lip_centroid[key]
+        results.append(res_entry)
 
-    if saving:
-        final_df = pd.DataFrame(results)
-        final_df.to_csv(csv_file_path, index=False)
-        print(f"\nAll experiments done. Final results saved to {csv_file_path}")
+        if saving:
+            final_df = pd.DataFrame(results)
+            final_df.to_csv(csv_file_path, index=False)
+            print(f"\nAll experiments done. Final results saved to {csv_file_path}")
 
 if __name__ == "__main__":
     main()
