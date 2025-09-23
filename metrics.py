@@ -921,3 +921,20 @@ if __name__ == "__main__":
 
     metrics = compute_all_metrics(all_gt_emb, all_returns)
     print_metrics_summary(metrics)
+
+    all_gt_emb_concave = []
+    all_returns_concave = []
+    for i in range(10):
+        path=f"trajectories/dst_concave/dst_{i}.json"
+        emb_gt = create_ground_truth_dst(path)
+        returns = get_returns(path)
+        print(f"Policy {i} returns: {returns}")
+        print(f"Policy {i} ground truth embedding: {emb_gt}")
+        all_gt_emb_concave.append(emb_gt)
+        all_returns_concave.append(returns)
+
+    all_gt_emb_concave = np.array(all_gt_emb_concave)
+    all_returns_concave = np.array(all_returns_concave)
+
+    metrics_concave = compute_all_metrics(all_gt_emb_concave, all_returns_concave)
+    print_metrics_summary(metrics_concave)

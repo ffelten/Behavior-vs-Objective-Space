@@ -3,6 +3,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 trained_policies/
+*.vscode
 gpi_pareto/
 # C extensions
 *.so
