@@ -2,7 +2,7 @@
 Diagnostic metrics for comparing behavior and objective space representations.
 Each function takes representations in two different spaces and computes relevant metrics.
 """
-
+import json
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -16,7 +16,7 @@ from scipy.stats import spearmanr
 from scipy.linalg import orthogonal_procrustes
 from scipy.sparse.csgraph import minimum_spanning_tree, shortest_path
 from utils import create_ground_truth_dst, get_returns
-
+import ast
 def compute_pca_metrics(embedding_space, n_components=None):
     """
     Compute PCA-based metrics for structure analysis.
@@ -938,3 +938,66 @@ if __name__ == "__main__":
 
     metrics_concave = compute_all_metrics(all_gt_emb_concave, all_returns_concave)
     print_metrics_summary(metrics_concave)
+
+
+    dim=["3D"]
+    for dim_i in dim:
+        all_t_emb = []
+        all_returns = []
+        path=f'trajectories/dst_concave/dst_concave_{dim_i}_embeddings.json'
+        with open(path, "r") as f:
+            embedding = json.load(f)
+        all_returns = []
+        for policy in embedding:
+            returns = np.array(ast.literal_eval(policy['Return']))
+            all_returns.append(returns)
+            t_emb = np.array(policy['T_Embedding'])
+            all_t_emb.append(t_emb)
+        all_t_emb_concave = np.array(all_t_emb)
+        all_returns = np.array(all_returns)
+        print(f"Transformer embeddings and returns loaded successfully:")
+        print(f"  all_t_emb shape: {all_t_emb_concave.shape}")
+        print(f"  all_returns shape: {all_returns.shape}")
+        metrics=compute_all_metrics(all_t_emb_concave, all_returns)
+        print(f"___________for {dim_i} ___________")
+        print_metrics_summary(metrics)
+
+
+    print("_____________left right dst_____________")
+
+
+    for dim_i in dim:
+        all_t_emb = []
+        all_returns = []
+        path=f'trajectories/left_right_dst/left_right_dst_{dim_i}_embeddings.json'
+        with open(path, "r") as f:
+            embedding = json.load(f)
+        all_returns = []
+        for policy in embedding:
+            returns = np.array(ast.literal_eval(policy['Return']))
+            all_returns.append(returns)
+            t_emb = np.array(policy['T_Embedding'])
+            all_t_emb.append(t_emb)
+        all_t_emb = np.array(all_t_emb)
+        all_returns = np.array(all_returns)
+        print(f"Transformer embeddings and returns loaded successfully:")
+        print(f"  all_t_emb shape: {all_t_emb.shape}")
+        print(f"  all_returns shape: {all_returns.shape}")
+        metrics=compute_all_metrics(all_t_emb, all_returns)
+        print(f"___________for {dim_i} ___________")
+        print_metrics_summary(metrics)
+
+    print("______________________GTE cvs TE__________________________")
+    print("left right dst   ")
+    metrics=compute_all_metrics(all_gt_emb, all_t_emb)
+    print_metrics_summary(metrics)
+    print("dst concave   ")
+    metrics=compute_all_metrics(all_gt_emb_concave, all_t_emb_concave)
+    print_metrics_summary(metrics)
+
+
+
+
+
+
+

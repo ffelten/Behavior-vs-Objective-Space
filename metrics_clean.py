@@ -5,7 +5,8 @@ import torch
 from utils import create_ground_truth_dst, get_returns
 from reptrix import alpha, rankme, lidar
 from zadu import zadu
-
+import json
+import ast
 
 def compute_reptrix_metrics(embeddings):
     '''Compute RepTrix metrics for the given embeddings.'''
@@ -45,6 +46,8 @@ def compute_zadu_metrics(raw_data, embeddings):
         
 
 if __name__ == "__main__":
+
+    #########True embeddings###############
     all_gt_emb = []
     all_returns = []
     for i in range(6):
@@ -84,3 +87,53 @@ if __name__ == "__main__":
     zadu_metrics_concave = compute_zadu_metrics(all_returns_concave, all_gt_emb_concave)
     print(f"Concave Metrics: {zadu_metrics_concave}")
 
+
+    #########Transformer embeddings###############
+    dim=["3D", "4D"]
+    for dim_i in dim:
+        all_t_emb = []
+        all_returns = []
+        path=f'trajectories/dst_concave/dst_concave_{dim_i}_embeddings.json'
+        with open(path, "r") as f:
+            embedding = json.load(f)
+        all_returns = []
+        for policy in embedding:
+            returns = np.array(ast.literal_eval(policy['Return']))
+            all_returns.append(returns)
+            t_emb = np.array(policy['T_Embedding'])
+            all_t_emb.append(t_emb)
+        all_t_emb_concave = np.array(all_t_emb)
+        all_returns = np.array(all_returns)
+        print(f"Transformer embeddings and returns loaded successfully:")
+        print(f"  all_t_emb shape: {all_t_emb_concave.shape}")
+        print(f"  all_returns shape: {all_returns.shape}")
+        zadu_metrics_t = compute_zadu_metrics(all_returns, all_t_emb_concave)
+        print(f"Transformer Metrics for {dim_i} and concave: {zadu_metrics_t}")
+
+
+    for dim_i in dim:
+        all_t_emb = []
+        all_returns = []
+        path=f'trajectories/left_right_dst/left_right_dst_{dim_i}_embeddings.json'
+        with open(path, "r") as f:
+            embedding = json.load(f)
+        all_returns = []
+        for policy in embedding:
+            returns = np.array(ast.literal_eval(policy['Return']))
+            all_returns.append(returns)
+            t_emb = np.array(policy['T_Embedding'])
+            all_t_emb.append(t_emb)
+        all_t_emb = np.array(all_t_emb)
+        all_returns = np.array(all_returns)
+        print(f"Transformer embeddings and returns loaded successfully:")
+        print(f"  all_t_emb shape: {all_t_emb.shape}")
+        print(f"  all_returns shape: {all_returns.shape}")
+        zadu_metrics_t = compute_zadu_metrics(all_returns, all_t_emb)
+        print(f"Transformer Metrics for {dim_i} and left_right: {zadu_metrics_t}")
+
+
+    #########FINAL check - GTE vs TE##################
+    zadu_metrics_concave = compute_zadu_metrics(all_t_emb_concave, all_gt_emb_concave)
+    print(f"GTE vs TE Metrics for concave: {zadu_metrics_concave}")
+    zadu_metrics_lr = compute_zadu_metrics(all_t_emb, all_gt_emb)
+    print(f"GTE vs TE Metrics for left_right: {zadu_metrics_lr}")
