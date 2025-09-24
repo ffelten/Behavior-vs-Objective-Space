@@ -168,6 +168,7 @@ def main():
     trajectory_manager = {}
     # Initialize optional objective features container used by diagnostics
     obj_feats_from_json = None
+    single_trajectories_manager = {}
 
     if args.Traj2d or args.Reacherv4 or args.Pusherv4:
         trajectories_directory_path = "morl_behavior_objective/old_expert_trajectories/"
@@ -324,7 +325,10 @@ def main():
         trajectories = []
         true_labels = []
         obj_feats_list = []
+        single_trajectories = []
+        true_labels_single = []
         for i in range(num_policies):
+            single_trajectory = None
             file_path = os.path.join(trajectories_directory_path, f"{name_env}_{i}.json")
             with open(file_path, 'r') as f:
                 data = json.load(f)
@@ -337,20 +341,28 @@ def main():
                 acts = np.array(actions, dtype=np.float32)
                 
                 # Create a Trajectory object. infos and terminal are set to defaults.
-                trajectories.append(Trajectory(obs=obs, acts=acts, infos=None, terminal=True))
+                traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
+                if single_trajectory is None:
+                    single_trajectory = traj
+                trajectories.append(traj)
                 true_labels.append(i)
                 if ret_vec is not None:
                     obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
                 else:
                     obj_feats_list.append(None)
+            single_trajectories_manager[i] = {'trajectory': single_trajectory, 'return': ret_vec}
+            single_trajectories.append(single_trajectory)
+            true_labels_single.append(i)
 
         true_labels = np.array(true_labels)
+        true_labels_single = np.unique(np.array(true_labels_single))
         if len(obj_feats_list) == len(trajectories) and all(x is not None for x in obj_feats_list):
             obj_feats_from_json = np.vstack(obj_feats_list).astype(np.float64)
         else:
             obj_feats_from_json = None
         # It will pad trajectories since they have different lengths and prepare them for the model.
         all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, trajectories, true_labels)
+        all_states_single, all_actions_single, all_masks_single, all_labels_single, max_len_single = prepare_sa_trajectories(env_id, single_trajectories, true_labels_single)
 
         input_coord_dims = trajectories[0].obs.shape[1] if len(trajectories) > 0 and trajectories[0].obs.ndim > 1 else 1
         num_actions = trajectories[0].acts.shape[1] if len(trajectories) > 0 and trajectories[0].acts.ndim > 1 else 1
@@ -367,7 +379,10 @@ def main():
         trajectories = []
         true_labels = []
         obj_feats_list = []
+        single_trajectories = []
+        true_labels_single = []
         for i in range(num_policies):
+            single_trajectory = None
             file_path = os.path.join(trajectories_directory_path, f"dst_{i}.json")
             with open(file_path, 'r') as f:
                 data = json.load(f)
@@ -380,14 +395,21 @@ def main():
                 acts = np.array(actions, dtype=np.float32)
                 
                 # Create a Trajectory object. infos and terminal are set to defaults.
-                trajectories.append(Trajectory(obs=obs, acts=acts, infos=None, terminal=True))
+                traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
+                if single_trajectory is None:
+                    single_trajectory = traj
+                trajectories.append(traj)
                 true_labels.append(i)
                 if ret_vec is not None:
                     obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
                 else:
                     obj_feats_list.append(None)
+            single_trajectories_manager[i] = {'trajectory': single_trajectory, 'return': ret_vec}
+            single_trajectories.append(single_trajectory)
+            true_labels_single.append(i)
 
         true_labels = np.array(true_labels)
+        true_labels_single = np.unique(np.array(true_labels_single))
         if len(obj_feats_list) == len(trajectories) and all(x is not None for x in obj_feats_list):
             obj_feats_from_json = np.vstack(obj_feats_list).astype(np.float64)
         else:
@@ -395,6 +417,7 @@ def main():
 
         # It will pad trajectories since they have different lengths and prepare them for the model.
         all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, trajectories, true_labels)
+        all_states_single, all_actions_single, all_masks_single, all_labels_single, max_len_single = prepare_sa_trajectories(env_id, single_trajectories, true_labels_single)
 
         input_coord_dims = trajectories[0].obs.shape[1] if len(trajectories) > 0 and trajectories[0].obs.ndim > 1 else 1
         num_actions = trajectories[0].acts.shape[1] if len(trajectories) > 0 and trajectories[0].acts.ndim > 1 else 1
@@ -525,10 +548,10 @@ def main():
     tr_lr = 0.0001 if args.Traj2d else 0.0001 if args.Reacherv4 else 0.0001 if args.Pusherv4 else 0.0001 if args.DeepSeaTreasure else 0.0001 if args.DeepSeaTreasureConcave else 0.0001
     input_channels = obs_shape[0]
 
-    emb_dim =  12 if args.Traj2d else 32 if args.Reacherv4 else 32 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 4
+    emb_dim =  12 if args.Traj2d else 32 if args.Reacherv4 else 32 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 4 if args.DeepSeaTreasureConcave else 4
     cnn_output_dim = emb_dim
 
-    num_heads = 4 if args.Traj2d else 4 if args.Reacherv4 else 4 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 4
+    num_heads = 4 if args.Traj2d else 4 if args.Reacherv4 else 4 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 1 if args.DeepSeaTreasureConcave else 4
     nlayers = 2 if args.Traj2d else 2 if args.Reacherv4 else 2 if args.Pusherv4 else 1 if args.DeepSeaTreasure else 1 if args.DeepSeaTreasureConcave else 2
     d_hid = 1024 if args.Traj2d else 1024 if args.Reacherv4 else 1024 if args.Pusherv4 else 32 if args.DeepSeaTreasure else 32 if args.DeepSeaTreasureConcave else 1024
     loader_batch = 64 if args.Traj2d else 64 if args.Reacherv4 else 32 if args.Pusherv4 else 32
@@ -553,6 +576,7 @@ def main():
 
     print("--- Creating Dataloaders for State-Action Trajectories ---")
     full_dataset, train_dataset, val_dataset, test_dataset, total_dataloader, train_dataloader, val_dataloader, test_dataloader = datasets_preparation_sa(all_states,all_actions,all_masks,true_labels,train_size,val_size,test_size,loader_batch,val_bptt,test_bptt,SEED)
+    full_dataset_single, train_dataset_single, val_dataset_single, test_dataset_single, total_dataloader_single, train_dataloader_single, val_dataloader_single, test_dataloader_single = datasets_preparation_sa(all_states_single,all_actions_single,all_masks_single,true_labels_single,num_policies,0,0,1,1,1,SEED)
 
     print(f"*-*-*-*-*-*-*-*-* Datasets created from {len(full_dataset)} trajectories")
     # Create the model using the factory function for state-action models
@@ -624,6 +648,9 @@ def main():
     trajectory_manager, concatenations_test, indices_test = \
         inference_on_dataloader_cdec_sa(behaviorencoder, cluster_centroids, test_dataloader, trajectory_manager, device)
 
+    print("Inference on single dataset")
+    single_trajectories_manager, concatenations_single, indices_single = \
+        inference_on_dataloader_cdec_sa(behaviorencoder, cluster_centroids, total_dataloader_single, single_trajectories_manager, device)
 
     # --- Process Embeddings for Visualization ---
     tj_embeddings_train_true_labels = [trajectory_manager[i]['real_cluster_label'].item() for i in indices_train]
@@ -635,16 +662,57 @@ def main():
 
     tj_concatenations_train = concatenations_train.squeeze(1).cpu().numpy()
     tj_concatenations_test = concatenations_test.squeeze(1).cpu().numpy()
+    tj_concatenations_single = concatenations_single.squeeze(1).cpu().numpy()
 
     tj_concatenations_evaluation = np.vstack([tj_concatenations_test])
     tj_embeddings_evaluation_true_labels = np.hstack([tj_embeddings_test_true_labels])
     tj_embeddings_evaluations_pred_labels = np.hstack([tj_embeddings_test_pred_labels])
+    tj_concatenations_single = np.vstack([tj_concatenations_single])
 
     tj_concatenations_seen = np.vstack([tj_concatenations_train, tj_concatenations_evaluation])
     tj_embeddings_seen_true_labels = np.hstack([tj_embeddings_train_true_labels, tj_embeddings_evaluation_true_labels])
     tj_embeddings_seen_pred_labels = np.hstack([tj_embeddings_train_pred_labels, tj_embeddings_evaluations_pred_labels])
     tj_concatenations_seen_true_labels = tj_embeddings_seen_true_labels
 
+    out = []
+    def _to_list(x):
+        if x is None:
+            return None
+        # torch Tensor
+        if isinstance(x, th.Tensor):
+            return x.detach().cpu().numpy().tolist()
+        # numpy array
+        try:
+            if isinstance(x, np.ndarray):
+                return x.tolist()
+        except Exception:
+            pass
+        # objects with tolist (e.g., lists, nested lists)
+        try:
+            if hasattr(x, "tolist"):
+                return x.tolist()
+        except Exception:
+            pass
+        # fallback to string
+        return str(x)
+
+    for i in range(len(single_trajectories_manager)):
+        traj = single_trajectories_manager[i].get('trajectory', None)
+        entry = {
+            "States": _to_list(traj.obs) if traj is not None else None,
+            "Actions": _to_list(traj.acts) if traj is not None else None,
+            "Return": _to_list(single_trajectories_manager[i].get('return', None)),
+            "T_Embedding": _to_list(single_trajectories_manager[i].get('cls_emb', None))
+        }
+        out.append(entry)
+
+    os.makedirs(trajectories_directory_path, exist_ok=True)
+    out_path = os.path.join(trajectories_directory_path, f"{name_env}_{emb_dim}D_embeddings.json")
+    with open(out_path, "w") as jf:
+        json.dump(out, jf, indent=2, ensure_ascii=False)
+    print(f"Saved single trajectories JSON to {out_path}")
+
+    exit()
 
     # --- Visualization and Metrics ---
     if args.Traj2d or args.Reacherv4 or args.Pusherv4:
@@ -771,7 +839,8 @@ def main():
         plt.show()
 
 
-    if diagnostics:
+    # old diagnostics
+    # if diagnostics:
         print('\n--- Running embedding / objective-space diagnostics (policy-level) ---')
         # 1) Collect embeddings (E), labels (L), and objective features (Obj_feats)
         try:
