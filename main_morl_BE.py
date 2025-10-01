@@ -76,6 +76,7 @@ warnings.filterwarnings("ignore")
 from morl_behavior_objective.methods.behaviorencoder import *
 from morl_behavior_objective.methods.behaviorencoder_utils import *
 from matplotlib.lines import Line2D
+import matplotlib as mpl
 
 
 
@@ -511,6 +512,26 @@ def main():
                             list_of_td_online=all_actions_online if simple_scaler_fit=='both' else None)
             all_actions = apply_per_traj(all_actions, sa)
             print("[Simple] Actions scaled.")
+        try:
+            if 'all_states_single' in locals() and all_states_single is not None:
+                if is_coord_states(all_states_single[0]) and state_scaler != 'none':
+                    ss_single = build_scaler(state_scaler)
+                    print(f"[Single] Fitting state scaler='{state_scaler}' for single trajectories on {simple_scaler_fit}.")
+                    ss_single = fit_on_flat(all_states_single, ss_single, fit_mode=simple_scaler_fit,
+                                             list_of_td_online=all_states_online if simple_scaler_fit=='both' and 'all_states_online' in locals() else None)
+                    all_states_single = apply_per_traj(all_states_single, ss_single)
+                    print("[Single] States scaled.")
+
+            if 'all_actions_single' in locals() and all_actions_single is not None:
+                if is_cont_actions(all_actions_single) and action_scaler != 'none':
+                    sa_single = build_scaler(action_scaler)
+                    print(f"[Single] Fitting action scaler='{action_scaler}' for single trajectories on {simple_scaler_fit}.")
+                    sa_single = fit_on_flat(all_actions_single, sa_single, fit_mode=simple_scaler_fit,
+                                            list_of_td_online=all_actions_online if simple_scaler_fit=='both' and 'all_actions_online' in locals() else None)
+                    all_actions_single = apply_per_traj(all_actions_single, sa_single)
+                    print("[Single] Actions scaled.")
+        except Exception as e:
+            print("Warning: failed to normalize single trajectories:", e)
     
     print("--- Populating Trajectory Manager ---")
     for i in range(len(trajectories)):
@@ -548,10 +569,10 @@ def main():
     tr_lr = 0.0001 if args.Traj2d else 0.0001 if args.Reacherv4 else 0.0001 if args.Pusherv4 else 0.0001 if args.DeepSeaTreasure else 0.0001 if args.DeepSeaTreasureConcave else 0.0001
     input_channels = obs_shape[0]
 
-    emb_dim =  12 if args.Traj2d else 32 if args.Reacherv4 else 32 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 4 if args.DeepSeaTreasureConcave else 4
+    emb_dim =  12 if args.Traj2d else 32 if args.Reacherv4 else 32 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 4
     cnn_output_dim = emb_dim
 
-    num_heads = 4 if args.Traj2d else 4 if args.Reacherv4 else 4 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 1 if args.DeepSeaTreasureConcave else 4
+    num_heads = 4 if args.Traj2d else 4 if args.Reacherv4 else 4 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 4
     nlayers = 2 if args.Traj2d else 2 if args.Reacherv4 else 2 if args.Pusherv4 else 1 if args.DeepSeaTreasure else 1 if args.DeepSeaTreasureConcave else 2
     d_hid = 1024 if args.Traj2d else 1024 if args.Reacherv4 else 1024 if args.Pusherv4 else 32 if args.DeepSeaTreasure else 32 if args.DeepSeaTreasureConcave else 1024
     loader_batch = 64 if args.Traj2d else 64 if args.Reacherv4 else 32 if args.Pusherv4 else 32
@@ -674,6 +695,43 @@ def main():
     tj_embeddings_seen_pred_labels = np.hstack([tj_embeddings_train_pred_labels, tj_embeddings_evaluations_pred_labels])
     tj_concatenations_seen_true_labels = tj_embeddings_seen_true_labels
 
+
+    # --- Visualization and Metrics ---
+    if args.Traj2d or args.Reacherv4 or args.Pusherv4:
+        color_label_mapping = {
+                "tab:blue": "Mode 0",
+                "tab:red": "Mode 1",
+                "tab:green": "Mode 2",
+                "tab:purple": "Mode 3",
+                "tab:brown": "Mode 4",
+                "tab:orange": "Mode 5",
+                "y": "???"
+            }
+    elif args.DeepSeaTreasure:
+        policy_names = ["7_left", "6_right", "25_left", "24_right", "120_left", "124_right"]
+        label_colors = {
+            0: "lightblue", 1: "lightcoral",
+            2: "dodgerblue", 3: "red",
+            4: "darkblue", 5: "darkred"
+        }
+        label_map = {i: name for i, name in enumerate(policy_names)}
+    elif args.DeepSeaTreasureConcave:
+        num_policies = K
+        # Create a color gradient from light blue to dark red for 10 policies
+        colors = sns.blend_palette(["lightblue", "darkred"], n_colors=num_policies)
+        label_colors = {i: colors[i] for i in range(num_policies)}
+        label_map = {i: f"Mode {i}" for i in range(num_policies)}
+    else:
+        unique_true_labels = np.unique(tj_embeddings_seen_true_labels)
+        label_colors = {
+            0: "lightblue", 1: "lightcoral",
+            2: "dodgerblue", 3: "red",
+            4: "darkblue", 5: "darkred"
+        }
+        label_map = {label: f'Mode {label}' for label in unique_true_labels}
+
+
+
     out = []
     def _to_list(x):
         if x is None:
@@ -712,429 +770,35 @@ def main():
         json.dump(out, jf, indent=2, ensure_ascii=False)
     print(f"Saved single trajectories JSON to {out_path}")
 
-    exit()
+    single_cls_embs = np.array([single_trajectories_manager[i].get('cls_emb', np.zeros((emb_dim,))) for i in range(len(single_trajectories_manager))])
+    single_cls_embs_true_labels = np.array([single_trajectories_manager[i].get('return', None) for i in range(len(single_trajectories_manager))])
+    single_cls_embs_true_labels = np.arange(len(single_cls_embs)) 
+    # for i in range(len(single_cls_embs)):
+    #     print("Label:", single_cls_embs_true_labels[i], "Embedding:", single_cls_embs[i], "...")
 
-    # --- Visualization and Metrics ---
-    if args.Traj2d or args.Reacherv4 or args.Pusherv4:
-        color_label_mapping = {
-                "tab:blue": "Mode 0",
-                "tab:red": "Mode 1",
-                "tab:green": "Mode 2",
-                "tab:purple": "Mode 3",
-                "tab:brown": "Mode 4",
-                "tab:orange": "Mode 5",
-                "y": "???"
-            }
-    elif args.DeepSeaTreasure:
-        policy_names = ["7_left", "6_right", "25_left", "24_right", "120_left", "124_right"]
-        label_colors = {
-            0: "lightblue", 1: "lightcoral",
-            2: "dodgerblue", 3: "red",
-            4: "darkblue", 5: "darkred"
-        }
-        label_map = {i: name for i, name in enumerate(policy_names)}
-    elif args.DeepSeaTreasureConcave:
-        num_policies = K
-        # Create a color gradient from light blue to dark red for 10 policies
-        colors = sns.blend_palette(["lightblue", "darkred"], n_colors=num_policies)
-        label_colors = {i: colors[i] for i in range(num_policies)}
-        label_map = {i: f"Mode {i}" for i in range(num_policies)}
-    else:
-        label_colors = {
-            0: "lightblue", 1: "lightcoral",
-            2: "dodgerblue", 3: "red",
-            4: "darkblue", 5: "darkred"
-        }
-        label_map = {label: f'Mode {label}' for label in unique_true_labels}
-        
-    reducer = umap.UMAP(
-            random_state=SEED,
-            n_neighbors=100,
-            min_dist=0.99,
-            n_components=2 if emb_dim != 3 else 3,
-            metric='cosine',
-        )
-
-    umap_combined = reducer.fit_transform(tj_concatenations_seen)
-
-    # If embeddings are 3D, show a raw 3D scatter of the learned embeddings (no reduction)
-    if args.visualize_clusters and emb_dim == 3:
-        print("\n--- Visualizing RAW 3D Embeddings (no reduction) ---")
-        fig = plt.figure(figsize=(10, 8))
+    # Plot single_cls_embs: raw 3D if emb_dim==3, else UMAP to 3D
+    if emb_dim == 3:
+        fig = plt.figure(figsize=(8, 6))
         ax = fig.add_subplot(111, projection='3d')
-        unique_true_labels = np.unique(tj_embeddings_seen_true_labels)
-        for label in unique_true_labels:
-            mask = tj_embeddings_seen_true_labels == label
-            pts = tj_concatenations_seen[mask]
-            if pts.size == 0:
-                continue
-            ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2],
-                       c=label_colors.get(label, 'gray'),
-                       label=label_map.get(label, f'Mode {label}'),
-                       alpha=0.7, s=50)
-        ax.set_title(f'Raw 3D Embeddings with True Labels ({env_id})')
-        ax.set_xlabel('Emb-1')
-        ax.set_ylabel('Emb-2')
-        ax.set_zlabel('Emb-3')
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-        fig.tight_layout(rect=[0, 0, 0.85, 1])
-        image_filename = os.path.join(image_dir, f"3d_space_{name_env}_emb_dim{emb_dim}.pdf")
-        plt.savefig(image_filename, bbox_inches='tight')
-        print(f"Saved raw 3D embedding plot to {image_filename}")
-        plt.show()
+        ax.scatter(single_cls_embs[:, 0], single_cls_embs[:, 1], single_cls_embs[:, 2], 
+                c=[label_colors.get(lbl, "gray") for lbl in single_cls_embs_true_labels], s=50, alpha=0.8)
 
-    # --- Simple UMAP-TSNE Visualization with True Labels ---
-    else:
-        print("\n--- Visualizing UMAP with True Labels ---")
-        fig = plt.figure(figsize=(10, 8))
-        
-        # Define colors for true labels
-        unique_true_labels = np.unique(tj_embeddings_seen_true_labels)
-        
-        ax = fig.add_subplot(111)
-        for label in unique_true_labels:
-            mask = tj_embeddings_seen_true_labels == label
-            ax.scatter(umap_combined[mask, 0], umap_combined[mask, 1],
-                        c=label_colors.get(label, 'gray'),
-                        label=label_map.get(label, f'Mode {label}'),
-                        alpha=0.7, s=50)
-        ax.set_title(f'2D UMAP of Embeddings with True Labels ({env_id})')
-        ax.set_xlabel('UMAP-1')
-        ax.set_ylabel('UMAP-2')
-
-        ax.legend()
+        ax.set_title(f"Single CLS Embeddings ({name_env})")
+        ax.set_xlabel("Dim-1"); ax.set_ylabel("Dim-2"); ax.set_zlabel("Dim-3")
         plt.tight_layout()
-        
-        image_filename = os.path.join(image_dir, f"space_{name_env}_emb_dim{emb_dim}.pdf")
-        
-        plt.savefig(image_filename, bbox_inches='tight')
-        print(f"Saved UMAP plot to {image_filename}")
-
         plt.show()
+    else:
+        reducer = umap.UMAP(random_state=SEED, n_neighbors=10, min_dist=0.1, n_components=3)
+        umap_proj_single = reducer.fit_transform(single_cls_embs)
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(umap_proj_single[:, 0], umap_proj_single[:, 1], umap_proj_single[:, 2], 
+                c=[label_colors.get(lbl, "gray") for lbl in single_cls_embs_true_labels], s=50, alpha=0.8)
 
-        # --- TSNE Visualization (same data as UMAP) ---
-        print("\n--- Visualizing t-SNE of Embeddings with True Labels ---")
-        tsne = TSNE(n_components=2, random_state=SEED, init='pca', metric='cosine')
-        tsne_proj = tsne.fit_transform(tj_concatenations_seen)
-
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111)
-        unique_true_labels = np.unique(tj_embeddings_seen_true_labels)
-        for label in unique_true_labels:
-            mask = tj_embeddings_seen_true_labels == label
-            pts = tsne_proj[mask]
-            if pts.size == 0:
-                continue
-            ax.scatter(pts[:, 0], pts[:, 1], c=label_colors.get(label, 'gray'), label=label_map.get(label, f'Mode {label}'), alpha=0.7, s=50)
-
-        ax.set_title(f't-SNE of Embeddings with True Labels ({env_id})')
-        ax.set_xlabel('tSNE-1')
-        ax.set_ylabel('tSNE-2')
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-        fig.tight_layout(rect=[0, 0, 0.85, 1])
-        image_filename = os.path.join(image_dir, f"tsne_space_{name_env}_emb_dim{emb_dim}.pdf")
-        plt.savefig(image_filename, bbox_inches='tight')
-        print(f"Saved t-SNE plot to {image_filename}")
-
+        ax.set_title(f"UMAP Projection of Single CLS Embeddings ({name_env})")
+        ax.set_xlabel("UMAP-1"); ax.set_ylabel("UMAP-2"); ax.set_zlabel("UMAP-3")
+        plt.tight_layout()
         plt.show()
-
-
-    # old diagnostics
-    # if diagnostics:
-        print('\n--- Running embedding / objective-space diagnostics (policy-level) ---')
-        # 1) Collect embeddings (E), labels (L), and objective features (Obj_feats)
-        try:
-            E = tj_concatenations_seen.astype(np.float64)
-        except Exception:
-            E = np.array(tj_concatenations_seen, dtype=np.float64)
-        L = np.asarray(tj_embeddings_seen_true_labels)
-
-        # Prefer per-trajectory returns from JSON; fallback to pseudo-objective only for DST
-        if obj_feats_from_json is not None and len(obj_feats_from_json) == E.shape[0]:
-            Obj_feats = np.array(obj_feats_from_json, dtype=np.float64)
-            print('Objective features: loaded per-trajectory returns from JSON.')
-        else:
-            if args.DeepSeaTreasure:
-                pair_positions = {0: 0.00, 1: 0.05, 2: 2.00, 3: 2.05, 4: 4.00, 5: 4.05}
-                Obj_feats = np.array([pair_positions[int(lbl)] for lbl in L]).reshape(-1, 1)
-                print('Objective features: built pseudo-objective from known left-right pairs (pairs are close).')
-            else:
-                # If returns missing, fall back to labels as last resort (rare)
-                Obj_feats = L.reshape(-1, 1).astype(np.float64)
-                print('Objective features: fallback to labels (proxy).')
-
-        # 2) Build one representative per policy (centroid in E and Obj space)
-        uniq = np.unique(L)
-        E_c = np.vstack([E[L == u].mean(axis=0) for u in uniq])
-        O_c = np.vstack([Obj_feats[L == u].mean(axis=0) for u in uniq])
-        n_c = E_c.shape[0]
-        image_dir_centroids = os.path.join(image_dir, 'centroids')
-        os.makedirs(image_dir_centroids, exist_ok=True)
-
-        _sc = StandardScaler()
-        O_c_std = _sc.fit_transform(O_c)
-
-        # 3) Basic structure metrics on centroids
-        # PCA and participation ratio (embedding space)
-        try:
-            pca_c = PCA(n_components=min(E_c.shape[1], max(1, n_c - 1))).fit(E_c)
-            explained_c = pca_c.explained_variance_ratio_
-            cum_c = explained_c.cumsum()
-            eigvals_c = pca_c.explained_variance_
-            participation_ratio_c = (eigvals_c.sum()**2) / (eigvals_c**2).sum()
-        except Exception:
-            cum_c = np.array([])
-            participation_ratio_c = float('nan')
-
-        # Intrinsic dimension (MLE) on centroids
-        try:
-            E_c_jitter = E_c + 1e-9 * np.random.randn(*E_c.shape)
-            k_mle_c = max(2, min(5, n_c - 1))
-            id_mle_c = mle_intrinsic_dim(E_c_jitter, k=k_mle_c)
-        except Exception:
-            id_mle_c, k_mle_c = float('nan'), None
-
-        # 4) Distances and correlations (centroids only)
-        D_emb_c = pairwise_distances(E_c, metric='euclidean')
-        D_obj_c = pairwise_distances(O_c_std, metric='euclidean')
-        iu = np.triu_indices(n_c, k=1)
-
-        # Spearman (global)
-        try:
-            rho_c, pval_c = spearmanr(D_emb_c[iu], D_obj_c[iu])
-        except Exception:
-            rho_c, pval_c = float('nan'), float('nan')
-
-        # Two-sided Mantel permutation (centroids)
-        try:
-            mantel_r_c, mantel_p_c, _, mantel_hist_path_c = mantel_permutation_test_two_sided(
-                D_emb_c, D_obj_c, perms=2000, seed=SEED, image_dir=image_dir_centroids, E=E_c
-            )
-        except Exception:
-            mantel_r_c, mantel_p_c, mantel_hist_path_c = float('nan'), float('nan'), None
-
-        # 5) Local neighborhood agreement at centroid level
-        def safe_k(n, cap=3):
-            # use a conservative k for small n to avoid tie/edge artifacts
-            return min(cap, max(1, n - 3))
-        k_loc = safe_k(n_c, cap=2)  # force k<=2 for small n (e.g., n=6 -> k=2)
-
-        # add tiny jitter to break exact ties in objective space
-        rng = np.random.RandomState(SEED)
-        O_c_tw = O_c_std + 1e-9 * rng.normal(size=O_c_std.shape)
-
-        try:
-            tw_c = trustworthiness(O_c_tw, E_c, n_neighbors=k_loc)
-        except Exception:
-            # fallback: even smaller k if needed
-            try:
-                tw_c = trustworthiness(O_c_tw, E_c, n_neighbors=1)
-            except Exception:
-                tw_c = float('nan')
-
-        try:
-            mean_ov_c, quartiles_c = knn_overlap(O_c_tw, E_c, k=k_loc)
-        except Exception:
-            mean_ov_c, quartiles_c = float('nan'), [float('nan')] * 3
-
-        # Pareto-like kNN overlap (nearest neighbors in objective vs embedding)
-        try:
-            D_obj_c_tw = pairwise_distances(O_c_tw, metric='euclidean')
-            nn_obj = np.argsort(D_obj_c_tw, axis=1)[:, 1:k_loc + 1]
-            nn_emb = np.argsort(D_emb_c, axis=1)[:, 1:k_loc + 1]
-            pareto_knn_mean_c = float(np.mean([len(set(nn_obj[i]) & set(nn_emb[i])) / float(k_loc)
-                                               for i in range(n_c)]))
-        except Exception:
-            pareto_knn_mean_c = float('nan')
-
-        # 6) Order-aware diagnostics that ignore curvature/pose
-        # Procrustes (shape alignment) — match dimensionalities first
-        try:
-            p, q = O_c.shape[1], E_c.shape[1]
-            if p != q:
-                if q > p:
-                    E_for_proc = PCA(n_components=p, random_state=SEED).fit_transform(E_c)
-                    O_for_proc = O_c
-                else:
-                    O_for_proc = PCA(n_components=q, random_state=SEED).fit_transform(O_c)
-                    E_for_proc = E_c
-            else:
-                O_for_proc, E_for_proc = O_c, E_c
-
-            Oc_norm, Ec_norm, disparity = procrustes(O_for_proc, E_for_proc)
-            D_emb_c_proc = pairwise_distances(Ec_norm)
-            D_obj_c_proc = pairwise_distances(Oc_norm)
-            rho_c_proc, pval_c_proc = spearmanr(D_emb_c_proc[iu], D_obj_c_proc[iu])
-        except Exception:
-            disparity, rho_c_proc, pval_c_proc = float('nan'), float('nan'), float('nan')
-        # Geodesic/MST distances
-        def mst_geodesic(D):
-            try:
-                
-                mst = minimum_spanning_tree(D)
-                G = shortest_path(mst, directed=False)
-                return G
-            except Exception:
-                return D
-
-        try:
-            G_emb_c = mst_geodesic(D_emb_c)
-            G_obj_c = mst_geodesic(D_obj_c)
-            rho_c_geo, pval_c_geo = spearmanr(G_emb_c[iu], G_obj_c[iu])
-        except Exception:
-            rho_c_geo, pval_c_geo = float('nan'), float('nan')
-
-        # 1D order correlation (principal directions)
-        try:
-            k_iso = min(4, max(2, n_c - 2))
-            iso_o = Isomap(n_neighbors=k_iso, n_components=1)
-            iso_e = Isomap(n_neighbors=k_iso, n_components=1)
-            o1 = iso_o.fit_transform(O_c_std).ravel()
-            e1 = iso_e.fit_transform(E_c).ravel()
-            # allow for reversed direction
-            rho_order = max(spearmanr(e1, o1)[0], spearmanr(-e1, o1)[0])
-            p_order = float('nan')  # small-n p-value not very meaningful here
-        except Exception:
-            rho_order, p_order = float('nan'), float('nan')
-
-        # 7) Shepard diagram (centroids) + stress
-        try:
-            x = D_obj_c[iu].astype(np.float64)
-            y = D_emb_c[iu].astype(np.float64)
-            alpha = (x * y).sum() / (x * x).sum() if (x * x).sum() > 0 else 0.0
-            stress = float(np.sqrt(np.sum((y - alpha * x) ** 2) / (np.sum(y ** 2) + 1e-12)))
-            fig = plt.figure(figsize=(5, 4))
-            plt.scatter(x, y, s=12, alpha=0.7)
-            xs = np.linspace(float(x.min()), float(x.max()), 50) if x.size else np.array([0, 1])
-            plt.plot(xs, alpha * xs, 'r--', lw=1)
-            plt.xlabel('D_obj (policy-level)'); plt.ylabel('D_emb (policy-level)')
-            plt.title(f'Shepard (centroids) stress={stress:.3f}')
-            shep_path = os.path.join(image_dir_centroids, f'shepard_centroids_embdim{E.shape[1]}.pdf')
-            plt.tight_layout(); plt.savefig(shep_path); plt.close(fig)
-        except Exception:
-            stress, shep_path = float('nan'), None
-
-        # 8) Lipschitz diagnostics at centroid level
-        try:
-            k_lip = safe_k(n_c, cap=3)
-            eps, min_sep = 1e-12, 1e-6
-            if k_lip >= 1 and n_c > 1:
-                # obj->emb
-                nn_obj_c = NearestNeighbors(n_neighbors=k_lip + 1).fit(O_c_std)
-                d_obj_nn, idx_obj_nn = nn_obj_c.kneighbors(O_c_std)
-                d_obj_nn = d_obj_nn[:, 1:]; idx_obj_nn = idx_obj_nn[:, 1:]
-                emb_d_objnbr = np.linalg.norm(E_c[:, None, :] - E_c[idx_obj_nn], axis=2)
-                mask_obj = d_obj_nn > min_sep
-                ratios_o2e = np.full_like(emb_d_objnbr, np.nan, dtype=np.float64)
-                ratios_o2e[mask_obj] = emb_d_objnbr[mask_obj] / (d_obj_nn[mask_obj] + eps)
-                lip_o2e_med = float(np.nanmedian(ratios_o2e))
-                lip_o2e_p90 = float(np.nanpercentile(ratios_o2e, 90))
-                # emb->obj
-                nn_emb_c = NearestNeighbors(n_neighbors=k_lip + 1).fit(E_c)
-                d_emb_nn, idx_emb_nn = nn_emb_c.kneighbors(E_c)
-                d_emb_nn = d_emb_nn[:, 1:]; idx_emb_nn = idx_emb_nn[:, 1:]
-                obj_d_embnbr = np.linalg.norm(O_c_std[:, None, :] - O_c_std[idx_emb_nn], axis=2)
-                mask_emb = d_emb_nn > min_sep
-                ratios_e2o = np.full_like(obj_d_embnbr, np.nan, dtype=np.float64)
-                ratios_e2o[mask_emb] = obj_d_embnbr[mask_emb] / (d_emb_nn[mask_emb] + eps)
-                lip_e2o_med = float(np.nanmedian(ratios_e2o))
-                lip_e2o_p90 = float(np.nanpercentile(ratios_e2o, 90))
-                # save simple hists
-                def save_hist_c(data, name):
-                    d = data[np.isfinite(data)]
-                    if d.size == 0: return None
-                    plt.figure(figsize=(5, 3.2))
-                    sns.histplot(d, bins=40, stat='density', color='C1', alpha=0.85)
-                    if np.max(d) / max(np.median(d), 1e-9) > 1e3:
-                        plt.xscale('log')
-                    outp = os.path.join(image_dir_centroids, f'{name}_embdim{E.shape[1]}.pdf')
-                    plt.tight_layout(); plt.savefig(outp); plt.close()
-                    return outp
-                lip_c_o2e_pdf = save_hist_c(np.nanmedian(ratios_o2e, axis=1), 'centroids_lip_local_med_obj2emb')
-                lip_c_e2o_pdf = save_hist_c(np.nanmedian(ratios_e2o, axis=1), 'centroids_lip_local_med_emb2obj')
-            else:
-                lip_o2e_med = lip_o2e_p90 = lip_e2o_med = lip_e2o_p90 = float('nan')
-                lip_c_o2e_pdf = lip_c_e2o_pdf = None
-        except Exception:
-            lip_o2e_med = lip_o2e_p90 = lip_e2o_med = lip_e2o_p90 = float('nan')
-            lip_c_o2e_pdf = lip_c_e2o_pdf = None
-
-        # 9) Within/Between for DST only (policy pairs that are Pareto-close)
-        if args.DeepSeaTreasure:
-            try:
-                # label indices in uniq are the policy ids (0..5)
-                pairs = {(0, 1), (2, 3), (4, 5)}
-                label_by_row = {ri: int(lab) for ri, lab in enumerate(uniq)}
-                within_c, between_c = [], []
-                for i in range(n_c):
-                    for j in range(i + 1, n_c):
-                        a, b = label_by_row[i], label_by_row[j]
-                        if (a, b) in pairs or (b, a) in pairs:
-                            within_c.append(D_emb_c[i, j])
-                        else:
-                            between_c.append(D_emb_c[i, j])
-                mean_within_c = float(np.mean(within_c)) if within_c else float('nan')
-                mean_between_c = float(np.mean(between_c)) if between_c else float('nan')
-            except Exception:
-                mean_within_c = mean_between_c = float('nan')
-        else:
-            mean_within_c = mean_between_c = float('nan')
-
-        # 10) Print compact, policy-level report
-        print(f'\n[Policy-level] diagnostics for emb_dim {E.shape[1]} (n_policies={n_c}):')
-        print('  PCA cumulative explained:', cum_c[:8])
-        print(f'  Participation ratio = {participation_ratio_c:.3f}')
-        print(f'  MLE intrinsic dim (k={k_mle_c}) = {id_mle_c:.3f}')
-        print(f'  Spearman(D_emb, D_obj) = {rho_c:.3f} (p~{pval_c})')
-        print(f'  Mantel (two-sided) spearman r={mantel_r_c:.3f}, p={mantel_p_c:.3f}')
-        print(f'  Trustworthiness (obj -> emb) = {tw_c:.3f}')
-        print(f'  kNN overlap mean={mean_ov_c:.3f}, quartiles={quartiles_c}; pareto-like kNN mean={pareto_knn_mean_c:.3f}')
-        print(f'  Procrustes disparity={disparity:.3f}; Spearman after Procrustes={rho_c_proc:.3f} (p~{pval_c_proc})')
-        print(f'  Geodesic (MST) Spearman={rho_c_geo:.3f} (p~{pval_c_geo})')
-        print(f'  1D order Spearman (PCA1)={rho_order:.3f} (p~{p_order})')
-        print(f'  Shepard stress (centroids)={stress:.3f}; saved={shep_path}')
-        if args.DeepSeaTreasure:
-            print(f'  Within/Between means (policy-level): within={mean_within_c:.4f}, between={mean_between_c:.4f}')
-        print(f'  Lipschitz obj->emb median/p90: {lip_o2e_med} / {lip_o2e_p90}')
-        print(f'  Lipschitz emb->obj median/p90: {lip_e2o_med} / {lip_e2o_p90}')
-
-        # 11) Save results dict (policy-level only)
-        res_entry = {
-            'emb_dim': int(E.shape[1]),
-            'centroid_participation_ratio': float(participation_ratio_c),
-            'centroid_id_mle': float(id_mle_c),
-            'centroid_pca_cum': cum_c[:8].tolist() if cum_c.size else [],
-            'centroid_spearman': float(rho_c),
-            'centroid_spearman_p': float(pval_c),
-            'centroid_mantel_r': float(mantel_r_c),
-            'centroid_mantel_p': float(mantel_p_c),
-            'centroid_mantel_hist_path': mantel_hist_path_c,
-            'centroid_trustworthiness': float(tw_c),
-            'centroid_knn_overlap_mean': float(mean_ov_c),
-            'centroid_pareto_knn_mean': float(pareto_knn_mean_c),
-            'centroid_procrustes_disparity': float(disparity),
-            'centroid_spearman_procrustes': float(rho_c_proc),
-            'centroid_spearman_geodesic': float(rho_c_geo),
-            'centroid_spearman_order_1d': float(rho_order),
-            'centroid_shepard_path': shep_path,
-            'centroid_shepard_stress': float(stress),
-            'centroid_lip_obj2emb_med': float(lip_o2e_med),
-            'centroid_lip_obj2emb_p90': float(lip_o2e_p90),
-            'centroid_lip_emb2obj_med': float(lip_e2o_med),
-            'centroid_lip_emb2obj_p90': float(lip_e2o_p90),
-        }
-        if args.DeepSeaTreasure:
-            res_entry.update({
-                'centroid_within': float(mean_within_c),
-                'centroid_between': float(mean_between_c),
-            })
-        results.append(res_entry)
-
-        if saving:
-            final_df = pd.DataFrame(results)
-            os.makedirs(os.path.dirname(csv_file_path), exist_ok=True)
-            final_df.to_csv(csv_file_path, index=False)
-            print(f"\nDiagnostics saved to {csv_file_path}")
 
 if __name__ == "__main__":
     main()
