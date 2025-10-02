@@ -42,22 +42,3 @@ def get_returns(trajectory_path: str) -> npt.NDArray:
 
     return returns
 
-
-
-
-
-if __name__ == "__main__":
-    all_gt_emb = []
-    all_returns = []
-    for i in range(6):
-        path = f"trajectories/left_right_dst/left_right_dst_{i}.json"
-        emb_gt = create_ground_truth_dst(path)
-        returns = get_returns(path)
-        print(f"Policy {i} returns: {returns}")
-        print(f"Policy {i} ground truth embedding: {emb_gt}")
-        all_gt_emb.append(emb_gt)
-        all_returns.append(returns)
-    all_gt_emb = np.array(all_gt_emb)
-    all_returns = np.array(all_returns)
-    print(all_gt_emb)
-    print(all_returns)

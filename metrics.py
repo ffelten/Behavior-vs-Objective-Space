@@ -987,13 +987,13 @@ if __name__ == "__main__":
         print(f"___________for {dim_i} ___________")
         print_metrics_summary(metrics)
 
-    print("______________________GTE cvs TE__________________________")
-    print("left right dst   ")
-    metrics=compute_all_metrics(all_gt_emb, all_t_emb)
-    print_metrics_summary(metrics)
-    print("dst concave   ")
-    metrics=compute_all_metrics(all_gt_emb_concave, all_t_emb_concave)
-    print_metrics_summary(metrics)
+        print("______________________GTE vs TE__________________________")
+        print("left right dst   ")
+        metrics=compute_all_metrics(all_gt_emb, all_t_emb)
+        print_metrics_summary(metrics)
+        print("dst concave   ")
+        metrics=compute_all_metrics(all_gt_emb_concave, all_t_emb_concave)
+        print_metrics_summary(metrics)
 
 
 
