@@ -919,7 +919,7 @@ if __name__ == "__main__":
     all_gt_emb = np.array(all_gt_emb)
     all_returns = np.array(all_returns)
 
-    metrics = compute_all_metrics(all_gt_emb, all_returns)
+    metrics = compute_all_metrics(all_returns, all_gt_emb)
     print_metrics_summary(metrics)
 
     all_gt_emb_concave = []
@@ -936,7 +936,7 @@ if __name__ == "__main__":
     all_gt_emb_concave = np.array(all_gt_emb_concave)
     all_returns_concave = np.array(all_returns_concave)
 
-    metrics_concave = compute_all_metrics(all_gt_emb_concave, all_returns_concave)
+    metrics_concave = compute_all_metrics(all_returns_concave, all_gt_emb_concave )
     print_metrics_summary(metrics_concave)
 
 
