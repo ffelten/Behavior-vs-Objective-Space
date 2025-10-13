@@ -39,29 +39,29 @@ OPTIMAL_POLICIES_DST_CONCAVE = {
 EPISODES_PER_POLICY = 50
 
 
-# env = mo_gym.make("left-right-dst-v0", render_mode=None)
-env = mo_gym.make("deep-sea-treasure-v0", render_mode="human", dst_map=CONCAVE_MAP)
+env = mo_gym.make("left-right-dst-v0", render_mode=None)
+# env = mo_gym.make("deep-sea-treasure-v0", render_mode="human", dst_map=CONCAVE_MAP)
 
-# policy_disc_returns: dict[str, npt.NDArray] = {}
+policy_disc_returns: dict[str, npt.NDArray] = {}
 
-# for policy_name, policy in OPTIMAL_POLICIES.items():
-#     env.reset()
-#     done = False
-#     disc_return = np.array([0.0, 0.0])
-#     discount = 1.0
-#     i = 0
-#     print("Executing policy: ", policy_name)
-#     while not done:
-#         action = policy[i]
-#         i += 1
-#         obs, reward, terminated, truncated, info = env.step(action)
-#         done = terminated or truncated
-#         disc_return += discount * reward
-#         discount *= 1.0
+for policy_name, policy in OPTIMAL_POLICIES.items():
+    env.reset()
+    done = False
+    disc_return = np.array([0.0, 0.0])
+    discount = 1.0
+    i = 0
+    print("Executing policy: ", policy_name)
+    while not done:
+        action = policy[i]
+        i += 1
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        disc_return += discount * reward
+        discount *= 1.0
 
-#     policy_disc_returns[policy_name] = disc_return
+    policy_disc_returns[policy_name] = disc_return
 
-# print(policy_disc_returns)
+print(policy_disc_returns)
 
 
 def collect_trajectory(policy: list[int]) -> tuple[list, list, npt.NDArray]:
@@ -84,9 +84,9 @@ def collect_trajectory(policy: list[int]) -> tuple[list, list, npt.NDArray]:
     return states, actions, disc_return
 
 
-for i in range(len(OPTIMAL_POLICIES_DST_CONCAVE)):
+for i in range(len(OPTIMAL_POLICIES)):
     POLICY_ID = i
-    policy = list(OPTIMAL_POLICIES_DST_CONCAVE.values())[POLICY_ID]
+    policy = list(OPTIMAL_POLICIES.values())[POLICY_ID]
     states, actions, disc_return = collect_trajectory(policy)
     with open(f"trajectories/dst_concave/dst_{POLICY_ID}.json", "w") as f:
         json.dump(
@@ -99,31 +99,31 @@ for i in range(len(OPTIMAL_POLICIES_DST_CONCAVE)):
 
 
 # Extract x and y coordinates from policy_disc_returns
-# x_coords = [returns[0] for returns in policy_disc_returns.values()]
-# y_coords = [returns[1] for returns in policy_disc_returns.values()]
-# policy_names = list(policy_disc_returns.keys())
+x_coords = [returns[0] for returns in policy_disc_returns.values()]
+y_coords = [returns[1] for returns in policy_disc_returns.values()]
+policy_names = list(policy_disc_returns.keys())
 
-# # Create scatter plot with blue for left policies and red for right policies
-# plt.figure(figsize=(10, 8))
-# scatter_plots = []
+# Create scatter plot with blue for left policies and red for right policies
+plt.figure(figsize=(10, 8))
+scatter_plots = []
 
-# for name, returns in policy_disc_returns.items():
-#     if "left" in name:
-#         color = "blue"
-#     elif "right" in name:
-#         color = "red"
-#     scatter = plt.scatter(returns[0], returns[1], s=100, alpha=0.7, color=color, label=name)
-#     scatter_plots.append(scatter)
+for name, returns in policy_disc_returns.items():
+    if "left" in name:
+        color = "blue"
+    elif "right" in name:
+        color = "red"
+    scatter = plt.scatter(returns[1], returns[0], s=100, alpha=0.7, color=color, label=name)
+    scatter_plots.append(scatter)
 
-#     plt.annotate(name, (returns[0], returns[1]), xytext=(5, 5), textcoords="offset points", fontsize=10, fontweight="bold")
+    plt.annotate(name, (returns[0], returns[1]), xytext=(5, 5), textcoords="offset points", fontsize=10, fontweight="bold")
 
-# plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
-# plt.xlabel("Time")
-# plt.ylabel("Treasure Value")
-# plt.title("Pareto Frontier")
-# plt.grid(visible=True, alpha=0.3)
+plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+plt.xlabel("Time")
+plt.ylabel("Treasure Value")
+plt.title("Pareto Frontier")
+plt.grid(visible=True, alpha=0.3)
 
-# # Adjust layout to prevent legend cutoff
-# plt.tight_layout()
+# Adjust layout to prevent legend cutoff
+plt.tight_layout()
 
-# plt.show()
+plt.show()
