@@ -91,6 +91,7 @@ def setup_parser():
     arg_env.add_argument("-Pv4","--Pusherv4", help="Apply the selected algorithm to the Pusher-v4 environment",action="store_true")
     arg_env.add_argument("-DST","--DeepSeaTreasure", help="Apply the selected algorithm to the DeepSeaTreasure environment",action="store_true")
     arg_env.add_argument("-DSTC","--DeepSeaTreasureConcave", help="Apply the selected algorithm to the DeepSeaTreasureConcave environment",action="store_true")
+    arg_env.add_argument("-DSTS","--DeepSeaTreasureSmooth", help="Apply the selected algorithm to the DeepSeaTreasureSmooth environment",action="store_true")
 
     arg_alg = parser.add_argument_group('Unseen Split Selection')
     arg_alg.add_argument("-split","--use_seen_unseen_split", action="store_true", 
@@ -126,7 +127,7 @@ def main():
         K_known = 6
     elif args.DeepSeaTreasure:
         K = 6
-    elif args.DeepSeaTreasureConcave:
+    elif args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth:
         K = 10
     else:
         raise ValueError("No available environment selected. Please select either --Two Lakes Fishing (-F), --Traj2d(-T2D), --Reacher-v4(-Rv4) or --Pusher-v4(-Pv4).")
@@ -143,9 +144,9 @@ def main():
     embedding_strategy_code = "CLS" if args.embedding_strategy == "cls_only" else "HYB" if args.embedding_strategy == "hybrid" else "GO" if args.embedding_strategy == "goal_oriented" else "UNK"
     training_code = "SPLIT" if args.use_seen_unseen_split else "FULL"
 
-    env_name =  "Traj2d" if args.Traj2d else "Reacher-v4" if args.Reacherv4 else "Pusher-v4" if args.Pusherv4 else "DeepSeaTreasure" if args.DeepSeaTreasure else "DeepSeaTreasureConcave" if args.DeepSeaTreasureConcave else "Unknown"
+    env_name =  "Traj2d" if args.Traj2d else "Reacher-v4" if args.Reacherv4 else "Pusher-v4" if args.Pusherv4 else "DeepSeaTreasure" if args.DeepSeaTreasure else "DeepSeaTreasureConcave" if args.DeepSeaTreasureConcave else "DeepSeaTreasureSmooth" if args.DeepSeaTreasureSmooth else "Unknown"
     env_id =  "Traj2d" if args.Traj2d else "Reacher-v4" if args.Reacherv4 else "Pusher-v4" if args.Pusherv4 else "UnknownEnv"
-    env_code = "T2D" if args.Traj2d else "Rv4" if args.Reacherv4 else "Pv4" if args.Pusherv4 else "DST" if args.DeepSeaTreasure else "DSTC" if args.DeepSeaTreasureConcave else "UNK"
+    env_code = "T2D" if args.Traj2d else "Rv4" if args.Reacherv4 else "Pv4" if args.Pusherv4 else "DST" if args.DeepSeaTreasure else "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "UNK"
 
     print(f"*** CoMIIRL approach on {env_name} ***")
 
@@ -371,11 +372,11 @@ def main():
         K = len(np.unique(true_labels))
         print(f"Loaded {num_trajs} expert trajectories for {name_env} with {K} modes.")
 
-    elif args.DeepSeaTreasureConcave:
-        name_env = "dst_concave"
+    elif args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth:
+        name_env = "dst_concave" if args.DeepSeaTreasureConcave else "smooth"
         trajectories_directory_path = f"trajectories/{name_env}/"
         num_policies = K
-        env_id = "deep-sea-treasure-v0"
+        env_id = "deep-sea-treasure-v0" if args.DeepSeaTreasureConcave else "dst-smooth-v0"
 
         trajectories = []
         true_labels = []
@@ -384,7 +385,7 @@ def main():
         true_labels_single = []
         for i in range(num_policies):
             single_trajectory = None
-            file_path = os.path.join(trajectories_directory_path, f"dst_{i}.json")
+            file_path = os.path.join(trajectories_directory_path, f"dst_{i}.json" if args.DeepSeaTreasureConcave else f"smooth_{i}.json")
             with open(file_path, 'r') as f:
                 data = json.load(f)
             ret_vec = data.get('return', None)
@@ -429,7 +430,7 @@ def main():
     else:
         raise ValueError("No available environment selected. Please select either --Two Lakes Fishing (-F), --Traj2d(-T2D), --Reacher-v4(-Rv4) or --Pusher-v4(-Pv4) or --Humanoidv4(-Hv4) or --Walker2dv4(-Wv4)")
 
-    if not args.DeepSeaTreasure and not args.DeepSeaTreasureConcave:
+    if not args.DeepSeaTreasure and not args.DeepSeaTreasureConcave and not args.DeepSeaTreasureSmooth:
         print("--- Preparing State-Action Tensors")
         all_states,all_actions,all_masks,all_labels,max_len = prepare_sa_trajectories(env_id,trajectories,true_labels)
         all_states_online,all_actions_online,all_masks_online,all_labels_online,max_len_online = prepare_sa_trajectories(env_id,unseen_trajectories_for_online,true_labels_online)
@@ -569,12 +570,12 @@ def main():
     tr_lr = 0.0001 if args.Traj2d else 0.0001 if args.Reacherv4 else 0.0001 if args.Pusherv4 else 0.0001 if args.DeepSeaTreasure else 0.0001 if args.DeepSeaTreasureConcave else 0.0001
     input_channels = obs_shape[0]
 
-    emb_dim =  12 if args.Traj2d else 32 if args.Reacherv4 else 32 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 4
+    emb_dim =  12 if args.Traj2d else 32 if args.Reacherv4 else 32 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 3
     cnn_output_dim = emb_dim
 
-    num_heads = 4 if args.Traj2d else 4 if args.Reacherv4 else 4 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 4
-    nlayers = 2 if args.Traj2d else 2 if args.Reacherv4 else 2 if args.Pusherv4 else 1 if args.DeepSeaTreasure else 1 if args.DeepSeaTreasureConcave else 2
-    d_hid = 1024 if args.Traj2d else 1024 if args.Reacherv4 else 1024 if args.Pusherv4 else 32 if args.DeepSeaTreasure else 32 if args.DeepSeaTreasureConcave else 1024
+    num_heads = 4 if args.Traj2d else 4 if args.Reacherv4 else 4 if args.Pusherv4 else 3 if args.DeepSeaTreasure else 3 if args.DeepSeaTreasureConcave else 3
+    nlayers = 2 if args.Traj2d else 2 if args.Reacherv4 else 2 if args.Pusherv4 else 1 if args.DeepSeaTreasure else 1 if args.DeepSeaTreasureConcave else 1
+    d_hid = 1024 if args.Traj2d else 1024 if args.Reacherv4 else 1024 if args.Pusherv4 else 32 if args.DeepSeaTreasure else 32 if args.DeepSeaTreasureConcave else 32
     loader_batch = 64 if args.Traj2d else 64 if args.Reacherv4 else 32 if args.Pusherv4 else 32
     val_bptt = 8
     test_bptt = 1
@@ -715,10 +716,10 @@ def main():
             4: "darkblue", 5: "darkred"
         }
         label_map = {i: name for i, name in enumerate(policy_names)}
-    elif args.DeepSeaTreasureConcave:
+    elif args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth:
         num_policies = K
-        # Create a color gradient from light blue to dark red for 10 policies
-        colors = sns.blend_palette(["lightblue", "darkred"], n_colors=num_policies)
+        # Create a color gradient from dark blue to dark red for 10 policies
+        colors = sns.blend_palette(["darkblue", "darkred"], n_colors=num_policies)
         label_colors = {i: colors[i] for i in range(num_policies)}
         label_map = {i: f"Mode {i}" for i in range(num_policies)}
     else:
@@ -786,6 +787,7 @@ def main():
         ax.set_title(f"Single CLS Embeddings ({name_env})")
         ax.set_xlabel("Dim-1"); ax.set_ylabel("Dim-2"); ax.set_zlabel("Dim-3")
         plt.tight_layout()
+        plt.savefig(os.path.join(image_dir, f"single_cls_embeddings_{name_env}.png"))
         plt.show()
     else:
         reducer = umap.UMAP(random_state=SEED, n_neighbors=10, min_dist=0.1, n_components=3)
