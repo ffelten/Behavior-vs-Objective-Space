@@ -68,14 +68,6 @@ CONCAVE_FRONT = [
     np.array([124.0, -19]),
 ]
 
-LEFT_RIGHT_DST_FRONT = [
-    np.array([6.0, -7.0]),  # 6_right
-    np.array([7.0, -8.0]),  # 7_left
-    np.array([24.0, -13.0]),  # 24_right
-    np.array([25.0, -14.0]),  # 25_left
-    np.array([120.0, -18.0]),  # 120_left
-    np.array([124.0, -19.0]),  # 124_right
-]
 
 # As in Felten et al. 2022, same PF as concave, just harder map
 MIRRORED_MAP = np.array(
@@ -93,6 +85,47 @@ MIRRORED_MAP = np.array(
         [0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 124.0],
     ]
 )
+
+# SMOOTH
+SMOOTH_MAP = np.array(
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-10, 3.0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-10, -10, 5.0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-10, -10, -10, 7.0, 0, 0, 0, 0, 0, 0, 0],
+        [-10, -10, -10, -10, 9.0, 0, 0, 0, 0, 0, 0],
+        [-10, -10, -10, -10, -10, 11.0, 0, 0, 0, 0, 0],
+        [-10, -10, -10, -10, -10, -10, 13.0, 0, 0, 0, 0],
+        [-10, -10, -10, -10, -10, -10, -10, 15.0, 0, 0, 0],
+        [-10, -10, -10, -10, -10, -10, -10, -10, 17.0, 0, 0],
+        [-10, -10, -10, -10, -10, -10, -10, -10, -10, 19.0, 0],
+    ]
+)
+
+SMOOTH_FRONT = [
+    np.array([1.0, -1]),
+    np.array([3.0, -3]),
+    np.array([5.0, -5]),
+    np.array([7.0, -7]),
+    np.array([9.0, -9]),
+    np.array([11.0, -11]),
+    np.array([13.0, -13]),
+    np.array([15.0, -15]),
+    np.array([17.0, -17]),
+    np.array([19.0, -19]),
+]
+
+
+# LEFT RIGHT
+LEFT_RIGHT_DST_FRONT = [
+    np.array([6.0, -7.0]),  # 6_right
+    np.array([7.0, -8.0]),  # 7_left
+    np.array([24.0, -13.0]),  # 24_right
+    np.array([25.0, -14.0]),  # 25_left
+    np.array([120.0, -18.0]),  # 120_left
+    np.array([124.0, -19.0]),  # 124_right
+]
 
 LEFT_RIGHT_DST_MAP = np.array(
     [
@@ -163,6 +196,9 @@ class DeepSeaTreasure(gym.Env, EzPickle):
             elif np.all(dst_map == CONCAVE_MAP):
                 self.map_name = "concave"
                 self._pareto_front = CONCAVE_FRONT
+            elif np.all(dst_map == SMOOTH_MAP):
+                self.map_name = "smooth"
+                self._pareto_front = SMOOTH_FRONT
             else:
                 raise ValueError("Invalid map")
         elif np.all(dst_map == MIRRORED_MAP):
@@ -323,7 +359,7 @@ class DeepSeaTreasure(gym.Env, EzPickle):
     def reset(self, seed=None, **kwargs):
         super().reset(seed=seed)
 
-        if self.map_name in {"convex", "concave"}:
+        if self.map_name in {"convex", "concave", "smooth"}:
             self.current_state = np.array([0, 0], dtype=np.int32)
         elif self.map_name in {"mirrored", "left_right_dst"}:
             self.current_state = np.array([0, 10], dtype=np.int32)

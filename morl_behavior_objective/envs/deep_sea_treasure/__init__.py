@@ -4,7 +4,7 @@ from mo_gymnasium.envs.deep_sea_treasure.deep_sea_treasure import (
     CONCAVE_MAP,
     MIRRORED_MAP,
 )
-from morl_behavior_objective.envs.deep_sea_treasure.deep_sea_treasure import LEFT_RIGHT_DST_MAP
+from morl_behavior_objective.envs.deep_sea_treasure.deep_sea_treasure import LEFT_RIGHT_DST_MAP, SMOOTH_MAP
 
 
 register(
@@ -34,4 +34,11 @@ register(
     kwargs={
         "dst_map": LEFT_RIGHT_DST_MAP,
     },
+)
+
+register(
+    id="deep-sea-treasure-smooth-v0",
+    entry_point="morl_behavior_objective.envs.deep_sea_treasure.deep_sea_treasure:DeepSeaTreasure",
+    max_episode_steps=100,
+    kwargs={"dst_map": SMOOTH_MAP},
 )

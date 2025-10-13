@@ -13,7 +13,7 @@ LEFT = 2
 RIGHT = 3
 DOWN = 1
 
-OPTIMAL_POLICIES = {
+OPTIMAL_POLICIES_LEFT_RIGHT = {
     "7_left": 4 * [LEFT] + 5 * [DOWN],  # 9 moves
     "6_right": 3 * [RIGHT] + 5 * [DOWN],  # 8 moves
     "25_left": 7 * [LEFT] + 8 * [DOWN],  # 15 moves
@@ -36,15 +36,29 @@ OPTIMAL_POLICIES_DST_CONCAVE = {
     "124": 9 * [RIGHT] + 10 * [DOWN],  # 19 moves
 }
 
+OPTIMAL_POLICIES_SMOOTH = {
+    "1": 1 * [DOWN],  # 1 move
+    "3": 1 * [RIGHT] + 2 * [DOWN],  # 3 moves
+    "5": 2 * [RIGHT] + 3 * [DOWN],  # 5 moves
+    "7": 3 * [RIGHT] + 4 * [DOWN],  # 7 moves
+    "9": 4 * [RIGHT] + 5 * [DOWN],  # 9 moves
+    "11": 5 * [RIGHT] + 6 * [DOWN],  # 11 moves
+    "13": 6 * [RIGHT] + 7 * [DOWN],  # 13 moves
+    "15": 7 * [RIGHT] + 8 * [DOWN],  # 15 moves
+    "17": 8 * [RIGHT] + 9 * [DOWN],  # 17 moves
+    "19": 9 * [RIGHT] + 10 * [DOWN],  # 19 moves
+}
+
 EPISODES_PER_POLICY = 50
 
 
-env = mo_gym.make("left-right-dst-v0", render_mode=None)
+# env = mo_gym.make("left-right-dst-v0", render_mode=None)
+env = mo_gym.make("deep-sea-treasure-smooth-v0", render_mode="human")
 # env = mo_gym.make("deep-sea-treasure-v0", render_mode="human", dst_map=CONCAVE_MAP)
 
 policy_disc_returns: dict[str, npt.NDArray] = {}
 
-for policy_name, policy in OPTIMAL_POLICIES.items():
+for policy_name, policy in OPTIMAL_POLICIES_SMOOTH.items():
     env.reset()
     done = False
     disc_return = np.array([0.0, 0.0])
@@ -84,11 +98,11 @@ def collect_trajectory(policy: list[int]) -> tuple[list, list, npt.NDArray]:
     return states, actions, disc_return
 
 
-for i in range(len(OPTIMAL_POLICIES)):
+for i in range(len(OPTIMAL_POLICIES_SMOOTH)):
     POLICY_ID = i
-    policy = list(OPTIMAL_POLICIES.values())[POLICY_ID]
+    policy = list(OPTIMAL_POLICIES_SMOOTH.values())[POLICY_ID]
     states, actions, disc_return = collect_trajectory(policy)
-    with open(f"trajectories/dst_concave/dst_{POLICY_ID}.json", "w") as f:
+    with open(f"trajectories/smooth/smooth_{POLICY_ID}.json", "w") as f:
         json.dump(
             {"return": disc_return.tolist(), "trajectories": [[states, actions]] * EPISODES_PER_POLICY},
             f,
@@ -108,10 +122,7 @@ plt.figure(figsize=(10, 8))
 scatter_plots = []
 
 for name, returns in policy_disc_returns.items():
-    if "left" in name:
-        color = "blue"
-    elif "right" in name:
-        color = "red"
+    color = "blue" if "left" in name else "red"
     scatter = plt.scatter(returns[1], returns[0], s=100, alpha=0.7, color=color, label=name)
     scatter_plots.append(scatter)
 
