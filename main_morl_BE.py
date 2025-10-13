@@ -800,6 +800,7 @@ def main():
         ax.set_title(f"UMAP Projection of Single CLS Embeddings ({name_env})")
         ax.set_xlabel("UMAP-1"); ax.set_ylabel("UMAP-2"); ax.set_zlabel("UMAP-3")
         plt.tight_layout()
+        plt.savefig(os.path.join(image_dir, f"UMAP_{name_env}.png"))
         plt.show()
 
 if __name__ == "__main__":
