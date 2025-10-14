@@ -263,7 +263,6 @@ def main():
     # Add other envs if needed...
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
-    arg_hyp.add_argument("--traj_dir", default="trajectories/dst_concave")
     arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "cpu")
     arg_hyp.add_argument("--epochs", type=int, default=200)
     arg_hyp.add_argument("--batch_size", type=int, default=32)
@@ -282,7 +281,7 @@ def main():
     arg_hyp.add_argument("--action_scaler", default="quantile_normal")
     arg_hyp.add_argument("--scaler_fit", default="seen", choices=["seen", "both"])
     arg_hyp.add_argument("--model_dir", default="models/")
-    arg_hyp.add_argument("--model_prefix", default="be_")
+    arg_hyp.add_argument("--model_prefix", default="be")
     arg_hyp.add_argument("--train", action="store_true")
     arg_hyp.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -293,17 +292,28 @@ def main():
     random.seed(args.seed)
     device = th.device(args.device)
     print(f"Using device: {device}")
+    env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else "UNK"
 
     # --- Data Loading and Preparation (from main_morl_BE.py) ---
-    if args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth:
-        name_env = "dst_concave" if args.DeepSeaTreasureConcave else "smooth"
-        trajectories_directory_path = f"trajectories/{name_env}/"
-        num_policies = 10
-        env_id = "deep-sea-treasure-v0" if args.DeepSeaTreasureConcave else "dst-smooth-v0"
+    if args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth or args.DeepSeaTreasureLeftRight:
+        if args.DeepSeaTreasureLeftRight:
+            name_env = "left_right_dst"
+            trajectories_directory_path = f"trajectories/{name_env}/"
+            num_policies = 6
+            env_id = "left-right-dst-v0"
+        else: # Concave or Smooth
+            name_env = "dst_concave" if args.DeepSeaTreasureConcave else "smooth"
+            trajectories_directory_path = f"trajectories/{name_env}/"
+            num_policies = 10
+            env_id = "deep-sea-treasure-v0" if args.DeepSeaTreasureConcave else "dst-smooth-v0"
 
         trajectories, true_labels, obj_feats_list = [], [], []
         for i in range(num_policies):
-            file_path = os.path.join(trajectories_directory_path, f"dst_{i}.json" if args.DeepSeaTreasureConcave else f"smooth_{i}.json")
+            if args.DeepSeaTreasureLeftRight:
+                file_path = os.path.join(trajectories_directory_path, f"{name_env}_{i}.json")
+            else:
+                file_path = os.path.join(trajectories_directory_path, f"dst_{i}.json" if args.DeepSeaTreasureConcave else f"smooth_{i}.json")
+            
             with open(file_path, 'r') as f:
                 data = json.load(f)
             ret_vec = data.get('return', None)
@@ -314,6 +324,7 @@ def main():
                 trajectories.append(traj)
                 true_labels.append(i)
                 if ret_vec is not None:
+                    # Ensure obj_feats_list gets populated for every trajectory, even if return is the same for a policy
                     obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
     else:
         raise ValueError("Please select a valid environment, e.g., --DeepSeaTreasureConcave")
@@ -377,7 +388,7 @@ def main():
     optim = th.optim.AdamW(params, lr=args.lr)
 
     # --- Training or Loading ---
-    model_name = f"{args.model_prefix}_{args.emb_dim}d_{args.nheads}h_e{args.epochs}.pt"
+    model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_e{args.epochs}.pt"
     model_path = os.path.join(args.model_dir, model_name)
 
     if args.train:
@@ -446,7 +457,7 @@ def main():
             }
             output_data.append(entry)
 
-    json_path = os.path.join(trajectories_directory_path, f"policy_latents_{args.emb_dim}d.json")
+    json_path = os.path.join(trajectories_directory_path, f"{name_env}_{args.emb_dim}D_embeddings.json")
     with open(json_path, "w") as fh:
         json.dump(output_data, fh, indent=2)
     print(f"Saved aggregated policy latents to {json_path}")
