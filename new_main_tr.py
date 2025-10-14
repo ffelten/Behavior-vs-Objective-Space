@@ -13,6 +13,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from torch.utils.data import DataLoader
+import umap
+from tqdm import tqdm
 
 from imitation.data.types import Trajectory
 from morl_behavior_objective.methods.behaviorencoder import (
@@ -211,6 +213,45 @@ def get_all_embeddings(encoder, loader, device):
         all_policies.extend(labels.tolist())
     return np.vstack(all_cls_embs), np.array(all_policies)
 
+def visualize_trajectory_embeddings(embeddings, policies, emb_dim, title="Trajectory Embeddings (pre-aggregation)"):
+    """Visualizes the raw, un-aggregated trajectory embeddings."""
+    if emb_dim < 2:
+        print("Embedding dimension < 2; skipping raw trajectory visualization.")
+        return
+
+    unique_policies = np.unique(policies)
+    palette = sns.color_palette("tab10", n_colors=max(len(unique_policies), 3))
+    color_map = {pid: palette[i % len(palette)] for i, pid in enumerate(unique_policies)}
+    colors = [color_map[pid] for pid in policies]
+
+    fig = plt.figure(figsize=(8, 6))
+    
+    # Use UMAP for dimensionality reduction if emb_dim > 3
+    if emb_dim > 3:
+        print(f"Reducing {emb_dim}D -> 3D with UMAP for raw embedding visualization.")
+        reducer = umap.UMAP(n_components=3, random_state=42)
+        plot_embeddings = reducer.fit_transform(embeddings)
+        ax = fig.add_subplot(111, projection="3d")
+        ax.scatter(plot_embeddings[:, 0], plot_embeddings[:, 1], plot_embeddings[:, 2], c=colors, alpha=0.5)
+        ax.set_xlabel("UMAP Dim 1"); ax.set_ylabel("UMAP Dim 2"); ax.set_zlabel("UMAP Dim 3")
+    elif emb_dim == 3:
+        ax = fig.add_subplot(111, projection="3d")
+        ax.scatter(embeddings[:, 0], embeddings[:, 1], embeddings[:, 2], c=colors, alpha=0.5)
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2"); ax.set_zlabel("Dim 3")
+    else: # emb_dim == 2
+        ax = fig.add_subplot(111)
+        ax.scatter(embeddings[:, 0], embeddings[:, 1], c=colors, alpha=0.5)
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2")
+
+    # Create dummy artists for legend
+    for pid in unique_policies:
+        ax.scatter([], [], c=[color_map[pid]], label=f"Policy {pid}")
+
+    ax.set_title(title)
+    ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5))
+    plt.tight_layout()
+    plt.show()
+
 def aggregate_and_visualize_policy_embeddings(
     embeddings, policies, emb_dim, save_path=None
 ):
@@ -219,8 +260,8 @@ def aggregate_and_visualize_policy_embeddings(
     for pid in unique_policies:
         policy_latents[int(pid)] = embeddings[policies == pid].mean(axis=0)
 
-    if emb_dim < 3:
-        print("Embedding dimension < 3; skipping 3D visualization.")
+    if emb_dim < 2:
+        print("Embedding dimension < 2; skipping aggregated visualization.")
         return policy_latents
 
     agg_embeddings = np.array(list(policy_latents.values()))
@@ -230,17 +271,35 @@ def aggregate_and_visualize_policy_embeddings(
     color_map = {pid: palette[i % len(palette)] for i, pid in enumerate(unique_policies)}
 
     fig = plt.figure(figsize=(8, 6))
-    ax = fig.add_subplot(111, projection="3d")
+    
+    # Handle different dimensions for plotting
+    plot_title = "Aggregated Policy Embeddings"
+    if emb_dim > 3:
+        plot_title = f"Aggregated Policy Embeddings ({emb_dim}D -> 3D via UMAP)"
+        print(f"Reducing {emb_dim}D -> 3D with UMAP for aggregated visualization.")
+        reducer = umap.UMAP(n_components=3, random_state=42)
+        plot_embeddings = reducer.fit_transform(agg_embeddings)
+        ax = fig.add_subplot(111, projection="3d")
+        for i, pid in enumerate(agg_ids):
+            pts = plot_embeddings[i, :]
+            ax.scatter(pts[0], pts[1], pts[2], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+        ax.set_xlabel("UMAP Dim 1"); ax.set_ylabel("UMAP Dim 2"); ax.set_zlabel("UMAP Dim 3")
+    elif emb_dim == 3:
+        plot_title = "Aggregated Policy Embeddings (3D)"
+        ax = fig.add_subplot(111, projection="3d")
+        for i, pid in enumerate(agg_ids):
+            pts = agg_embeddings[i, :3]
+            ax.scatter(pts[0], pts[1], pts[2], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2"); ax.set_zlabel("Dim 3")
+    else: # emb_dim == 2
+        plot_title = "Aggregated Policy Embeddings (2D)"
+        ax = fig.add_subplot(111)
+        for i, pid in enumerate(agg_ids):
+            pts = agg_embeddings[i, :2]
+            ax.scatter(pts[0], pts[1], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2")
 
-    for i, pid in enumerate(agg_ids):
-        pts = agg_embeddings[i, :3]
-        ax.scatter(
-            pts[0], pts[1], pts[2],
-            c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9
-        )
-
-    ax.set_title("Aggregated Policy Embeddings (3D)")
-    ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2"); ax.set_zlabel("Dim 3")
+    ax.set_title(plot_title)
     ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5))
     plt.tight_layout()
 
@@ -251,6 +310,7 @@ def aggregate_and_visualize_policy_embeddings(
     plt.show()
 
     return {k: v.tolist() for k, v in policy_latents.items()}
+
 
 # ---------- Main Execution Block ----------
 def main():
@@ -273,10 +333,10 @@ def main():
     arg_hyp.add_argument("--d_hid", type=int, default=1024)
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
     arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
-    arg_hyp.add_argument("--info_weight", type=float, default=0.1)
-    arg_hyp.add_argument("--dim_weight", type=float, default=0.1)
-    arg_hyp.add_argument("--topo_weight", type=float, default=0.2)
-    arg_hyp.add_argument("--temperature", type=float, default=0.1)
+    arg_hyp.add_argument("--info_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--topo_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--temperature", type=float, default=1.0)
     arg_hyp.add_argument("--state_scaler", default="quantile_normal")
     arg_hyp.add_argument("--action_scaler", default="quantile_normal")
     arg_hyp.add_argument("--scaler_fit", default="seen", choices=["seen", "both"])
@@ -351,7 +411,6 @@ def main():
 
     # --- Dataset and DataLoader ---
     all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, norm_trajectories, np.array(true_labels))
-    print("MAXIMUM LENGTH OF TRAJECTORIES:", max_len)
     
     returns_per_traj = []
     policy_map = {i:[] for i in range(num_policies)}
@@ -393,12 +452,13 @@ def main():
 
     if args.train:
         print(f"Starting training for {args.epochs} epochs...")
-        for epoch in range(args.epochs):
+        pbar = tqdm(range(args.epochs))
+        for epoch in pbar:
             loss = train_epoch(
                 encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
                 args.recon_weight, args.info_weight, args.dim_weight, args.topo_weight
             )
-            print(f"Epoch {epoch+1}/{args.epochs}: loss={loss:.4f}")
+            pbar.set_description(f"Epoch {epoch+1}/{args.epochs} | Loss: {loss:.4f}")
         os.makedirs(args.model_dir, exist_ok=True)
         th.save({"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()}, model_path)
         print(f"Saved checkpoint to {model_path}")
@@ -412,6 +472,9 @@ def main():
     # --- Evaluation and Visualization ---
     print("Evaluating embeddings on the full dataset...")
     embeddings, policies = get_all_embeddings(encoder, loader, device)
+
+    print("Visualizing raw trajectory embeddings (pre-aggregation)...")
+    visualize_trajectory_embeddings(embeddings, policies, args.emb_dim)
 
     print("Aggregating and visualizing policy embeddings...")
     image_dir = f"./images/{env_id}/"
