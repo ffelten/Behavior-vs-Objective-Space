@@ -605,7 +605,7 @@ def main():
     behaviorencoder = create_model_BECwASATyped(
         input_channels=input_channels,
         cnn_output_dim=cnn_output_dim,
-        steps=max_len,  # Use the max_len from the data preparation step
+        steps=seq_max_len,  # Use the max_len from the data preparation step
         nhead=num_heads,
         d_hid=d_hid,
         emb_dim=emb_dim,
