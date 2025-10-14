@@ -181,7 +181,7 @@ class DeepSeaTreasure(gym.Env, EzPickle):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode: str  = None, dst_map=DEFAULT_MAP, float_state=False):
+    def __init__(self, render_mode: str | None = None, dst_map=DEFAULT_MAP, float_state=False):
         EzPickle.__init__(self, render_mode, dst_map, float_state)
 
         self.render_mode = render_mode
