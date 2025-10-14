@@ -409,10 +409,48 @@ def main():
         embeddings, policies, args.emb_dim, save_path=viz_path
     )
 
+    # --- Save aggregated embeddings in the detailed JSON format ---
+    print("Saving aggregated policy latents to JSON...")
+    
+    def _to_list(x):
+        if x is None:
+            return None
+        if isinstance(x, (th.Tensor, np.ndarray)):
+            return x.tolist()
+        # If it's already a list or other JSON-serializable type, return as is.
+        if isinstance(x, (list, tuple, int, float, str)):
+            return x
+        # Fallback for other types, though ideally everything is covered above.
+        return str(x)
+
+    output_data = []
+    unique_policies = np.unique(true_labels)
+
+    for pid in unique_policies:
+        # Find the index of the first trajectory for this policy
+        representative_idx = np.where(true_labels == pid)[0][0]
+        
+        # Get the representative trajectory's data
+        traj = trajectories[representative_idx]
+        ret = obj_feats_list[representative_idx]
+        
+        # Get the aggregated embedding for this policy
+        agg_embedding = policy_latents.get(int(pid))
+
+        if agg_embedding is not None:
+            entry = {
+                "States": _to_list(traj.obs),
+                "Actions": _to_list(traj.acts),
+                "Return": _to_list(ret),
+                "T_Embedding": _to_list(agg_embedding)
+            }
+            output_data.append(entry)
+
     json_path = os.path.join(trajectories_directory_path, f"policy_latents_{args.emb_dim}d.json")
     with open(json_path, "w") as fh:
-        json.dump(policy_latents, fh, indent=2)
+        json.dump(output_data, fh, indent=2)
     print(f"Saved aggregated policy latents to {json_path}")
+
 
 if __name__ == "__main__":
     main()
