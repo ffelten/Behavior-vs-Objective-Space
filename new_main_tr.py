@@ -320,6 +320,7 @@ def main():
     arg_env.add_argument("-DSTC","--DeepSeaTreasureConcave", help="DeepSeaTreasureConcave environment",action="store_true")
     arg_env.add_argument("-DSTS","--DeepSeaTreasureSmooth", help="DeepSeaTreasureSmooth environment",action="store_true")
     arg_env.add_argument("-DSTLR","--DeepSeaTreasureLeftRight", help="DeepSeaTreasureLeftRight environment",action="store_true")
+    arg_env.add_argument("-MHC","--MOHalfCheetah", help="MO-HalfCheetah environment",action="store_true")
     # Add other envs if needed...
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
@@ -352,7 +353,7 @@ def main():
     random.seed(args.seed)
     device = th.device(args.device)
     print(f"Using device: {device}")
-    env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else "UNK"
+    env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else "MHC" if args.MOHalfCheetah else "UNK"
 
     # --- Data Loading and Preparation (from main_morl_BE.py) ---
     if args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth or args.DeepSeaTreasureLeftRight:
@@ -386,8 +387,28 @@ def main():
                 if ret_vec is not None:
                     # Ensure obj_feats_list gets populated for every trajectory, even if return is the same for a policy
                     obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
+    elif args.MOHalfCheetah:
+        name_env = "mo-halfcheetah-v4"
+        trajectories_directory_path = f"trajectories/morld/{name_env}/"
+        num_policies = 31
+        env_id = "mo-halfcheetah-v4"
+
+        trajectories, true_labels, obj_feats_list = [], [], []
+        for i in range(num_policies):
+            file_path = os.path.join(trajectories_directory_path, f"policy_{i}.json")
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            ret_vec = data.get('return', None)
+            for states, actions in data['trajectories']:
+                obs = np.array(list(states) + [states[-1]], dtype=np.float32)
+                acts = np.array(actions, dtype=np.float32)
+                traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
+                trajectories.append(traj)
+                true_labels.append(i)
+                if ret_vec is not None:
+                    obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
     else:
-        raise ValueError("Please select a valid environment, e.g., --DeepSeaTreasureConcave")
+        raise ValueError("Please select a valid environment")
 
     all_states_raw = [t.obs for t in trajectories]
     all_actions_raw = [t.acts for t in trajectories]
@@ -411,7 +432,7 @@ def main():
 
     # --- Dataset and DataLoader ---
     all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, norm_trajectories, np.array(true_labels))
-    
+
     returns_per_traj = []
     policy_map = {i:[] for i in range(num_policies)}
     for i, label in enumerate(true_labels):
@@ -433,7 +454,7 @@ def main():
     num_actions = trajectories[0].acts.shape[1]
 
     encoder = BehaviorEncoderCLSattnSATyped(
-        input_channels=input_coord_dims, cnn_output_dim=args.emb_dim, steps=max_len,
+        input_channels=input_coord_dims, cnn_output_dim=args.emb_dim,steps=max_len, max_len=max_len,
         nhead=args.nheads, d_hid=args.d_hid, emb_dim=args.emb_dim,
         num_actions=num_actions, nlayers=args.nlayers, dropout=args.dropout,
         input_coord_dims=input_coord_dims
@@ -447,8 +468,9 @@ def main():
     optim = th.optim.AdamW(params, lr=args.lr)
 
     # --- Training or Loading ---
-    model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_e{args.epochs}.pt"
+    model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_l{args.nlayers}_e{args.epochs}.pt"
     model_path = os.path.join(args.model_dir, model_name)
+    print(encoder.model_type,"parameters ->",sum(p.numel() for p in encoder.parameters() if p.requires_grad)/1e6,"M")
 
     if args.train:
         print(f"Starting training for {args.epochs} epochs...")
@@ -478,7 +500,7 @@ def main():
 
     print("Aggregating and visualizing policy embeddings...")
     image_dir = f"./images/{env_id}/"
-    viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d.png")
+    viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d_e{args.epochs}.png")
     policy_latents = aggregate_and_visualize_policy_embeddings(
         embeddings, policies, args.emb_dim, save_path=viz_path
     )
@@ -520,10 +542,12 @@ def main():
             }
             output_data.append(entry)
 
-    json_path = os.path.join(trajectories_directory_path, f"{name_env}_{args.emb_dim}D_embeddings.json")
+    json_path = os.path.join(trajectories_directory_path, f"{name_env}_{args.emb_dim}D_l{args.nlayers}_embeddings_e{args.epochs}.json")
     with open(json_path, "w") as fh:
         json.dump(output_data, fh, indent=2)
     print(f"Saved aggregated policy latents to {json_path}")
+
+
 
 
 if __name__ == "__main__":
