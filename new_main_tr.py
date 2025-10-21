@@ -298,6 +298,7 @@ def aggregate_and_visualize_policy_embeddings(
         for i, pid in enumerate(agg_ids):
             pts = plot_embeddings[i, :]
             ax.scatter(pts[0], pts[1], pts[2], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], pts[2], str(pid), color='black', fontsize=12, ha='right', va='bottom')
         ax.set_xlabel("UMAP Dim 1"); ax.set_ylabel("UMAP Dim 2"); ax.set_zlabel("UMAP Dim 3")
     elif emb_dim == 3:
         plot_title = "Aggregated Policy Embeddings (3D)"
@@ -305,6 +306,7 @@ def aggregate_and_visualize_policy_embeddings(
         for i, pid in enumerate(agg_ids):
             pts = agg_embeddings[i, :3]
             ax.scatter(pts[0], pts[1], pts[2], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], pts[2], str(pid), color='black', fontsize=12, ha='right', va='bottom')
         ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2"); ax.set_zlabel("Dim 3")
     else: # emb_dim == 2
         plot_title = "Aggregated Policy Embeddings (2D)"
@@ -312,6 +314,7 @@ def aggregate_and_visualize_policy_embeddings(
         for i, pid in enumerate(agg_ids):
             pts = agg_embeddings[i, :2]
             ax.scatter(pts[0], pts[1], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], str(pid), color='black', fontsize=12, ha='right', va='bottom')
         ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2")
 
     ax.set_title(plot_title)
@@ -339,7 +342,7 @@ def main():
     # Add other envs if needed...
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
-    arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "cpu")
+    arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "mps" if th.backends.mps.is_available() else "cpu")
     arg_hyp.add_argument("--epochs", type=int, default=200)
     arg_hyp.add_argument("--spec_norm", action="store_true", help="Use spectral normalization in the decoder")
     arg_hyp.add_argument("--least_volumes", action="store_true", help="Encourage least volume embeddings")
@@ -422,6 +425,7 @@ def main():
                 # print("LEN CHEETAH OBS AND ACTS:", obs.shape, acts.shape)
                 obs = obs[:101]
                 acts = acts[:100]
+                timesteps = obs.shape[0] - 1
                 # print("Truncated HalfCheetah trajectories to length 100 for faster training.")
                 traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
                 trajectories.append(traj)
@@ -492,6 +496,7 @@ def main():
     model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_l{args.nlayers}_e{args.epochs}.pt"
     model_name = model_name.replace(".pt", "_specnorm.pt") if args.spec_norm else model_name
     model_name = model_name.replace(".pt", "_leastvol.pt") if args.least_volumes else model_name
+    model_name = model_name.replace(".pt", f"_ts{timesteps}.pt") if args.MOHalfCheetah else model_name
     model_path = os.path.join(args.model_dir, model_name)
     print(encoder.model_type,"parameters ->",sum(p.numel() for p in encoder.parameters() if p.requires_grad)/1e6,"M")
 
@@ -526,6 +531,7 @@ def main():
     viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d_e{args.epochs}.png")
     viz_path = viz_path.replace(".png", "_specnorm.png") if args.spec_norm else viz_path
     viz_path = viz_path.replace(".png", "_leastvol.png") if args.least_volumes else viz_path
+    viz_path = viz_path.replace(".png", f"_ts{timesteps}.png") if args.MOHalfCheetah else viz_path
     policy_latents = aggregate_and_visualize_policy_embeddings(
         embeddings, policies, args.emb_dim, save_path=viz_path
     )
@@ -570,6 +576,7 @@ def main():
     json_path = os.path.join(trajectories_directory_path, f"{name_env}_{args.emb_dim}D_l{args.nlayers}_embeddings_e{args.epochs}.json")
     json_path = json_path.replace(".json", "_specnorm.json") if args.spec_norm else json_path
     json_path = json_path.replace(".json", "_leastvol.json") if args.least_volumes else json_path
+    json_path = json_path.replace(".json", f"_ts{timesteps}.json") if args.MOHalfCheetah else json_path
     with open(json_path, "w") as fh:
         json.dump(output_data, fh, indent=2)
     print(f"Saved aggregated policy latents to {json_path}")
