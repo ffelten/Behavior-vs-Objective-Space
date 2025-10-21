@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from torch.utils.data import DataLoader
+from torch.nn.utils import parametrizations as parametrize
 import umap
 from tqdm import tqdm
 
@@ -35,7 +36,7 @@ from morl_behavior_objective.methods.behaviorencoder_utils import (
 
 # ---------- Decoder Definition ----------
 class TrajectoryDecoder(nn.Module):
-    def __init__(self, emb_dim, state_dim, action_dim, max_len):
+    def __init__(self, emb_dim, state_dim, action_dim, max_len,spec_norm=False):
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -43,11 +44,11 @@ class TrajectoryDecoder(nn.Module):
         self.out_features = max_len * (state_dim + action_dim)
 
         self.net = nn.Sequential(
-            nn.Linear(emb_dim, 1024),
+            nn.Linear(emb_dim, 1024) if not spec_norm else parametrize.spectral_norm(nn.Linear(emb_dim, 1024)),
             nn.GELU(),
-            nn.Linear(1024, 1024),
+            nn.Linear(1024, 1024) if not spec_norm else parametrize.spectral_norm(nn.Linear(1024, 1024)),
             nn.GELU(),
-            nn.Linear(1024, self.out_features),
+            nn.Linear(1024, self.out_features) if not spec_norm else parametrize.spectral_norm(nn.Linear(1024, self.out_features)),
         )
 
     def forward(self, cls_embedding):
@@ -89,6 +90,13 @@ def extract_scalar_returns(returns):
         else:
             values.append(float(ret))
     return values
+
+def loss_vol_simplified(z_normalized):
+    # z_normalized are the embeddings already on the hypersphere
+    s = z_normalized.std(0)
+    eta = 1e-6
+    # The geometric mean is still a valid measure of spread on the sphere
+    return th.exp(th.log(s + eta).mean())
 
 
 def datasets_preparation_ret(
@@ -132,7 +140,7 @@ def datasets_preparation_ret(
 # ---------- Training & Evaluation ----------
 def train_epoch(
     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-    recon_weight, info_weight, dim_weight, topo_weight
+    recon_weight, info_weight, dim_weight, topo_weight, least_volumes=False
 ):
     encoder.train()
     decoder.train()
@@ -187,12 +195,19 @@ def train_epoch(
                     - F.cosine_similarity(diffs[:-1], diffs[1:], dim=-1).mean()
                 )
 
+        vol_loss = th.tensor(0.0, device=device)
+        vol_weight = 0.0
+        if least_volumes:
+            vol_loss = loss_vol_simplified(cls_emb)
+            vol_weight = topo_weight
+
         # Total Weighted Loss
         loss = (
             recon_weight * recon_loss
             + info_weight * info_loss
             + dim_weight * dim_loss
             + topo_weight * topo_loss
+            + vol_weight * vol_loss
         )
 
         optim.zero_grad()
@@ -326,6 +341,8 @@ def main():
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
     arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "cpu")
     arg_hyp.add_argument("--epochs", type=int, default=200)
+    arg_hyp.add_argument("--spec_norm", action="store_true", help="Use spectral normalization in the decoder")
+    arg_hyp.add_argument("--least_volumes", action="store_true", help="Encourage least volume embeddings")
     arg_hyp.add_argument("--batch_size", type=int, default=32)
     arg_hyp.add_argument("--lr", type=float, default=3e-4)
     arg_hyp.add_argument("--emb_dim", type=int, default=3)
@@ -402,6 +419,10 @@ def main():
             for states, actions in data['trajectories']:
                 obs = np.array(list(states) + [states[-1]], dtype=np.float32)
                 acts = np.array(actions, dtype=np.float32)
+                # print("LEN CHEETAH OBS AND ACTS:", obs.shape, acts.shape)
+                obs = obs[:101]
+                acts = acts[:100]
+                # print("Truncated HalfCheetah trajectories to length 100 for faster training.")
                 traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
                 trajectories.append(traj)
                 true_labels.append(i)
@@ -460,7 +481,7 @@ def main():
         input_coord_dims=input_coord_dims
     ).to(device)
 
-    decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, num_actions, max_len).to(device)
+    decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, num_actions, max_len,spec_norm=args.spec_norm).to(device)
     info_loss_fn = InstanceLoss(args.temperature, device=device)
     dim_loss_fn = DeepInfoMaxLoss(args.emb_dim).to(device)
 
@@ -469,6 +490,8 @@ def main():
 
     # --- Training or Loading ---
     model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_l{args.nlayers}_e{args.epochs}.pt"
+    model_name = model_name.replace(".pt", "_specnorm.pt") if args.spec_norm else model_name
+    model_name = model_name.replace(".pt", "_leastvol.pt") if args.least_volumes else model_name
     model_path = os.path.join(args.model_dir, model_name)
     print(encoder.model_type,"parameters ->",sum(p.numel() for p in encoder.parameters() if p.requires_grad)/1e6,"M")
 
@@ -478,7 +501,7 @@ def main():
         for epoch in pbar:
             loss = train_epoch(
                 encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-                args.recon_weight, args.info_weight, args.dim_weight, args.topo_weight
+                args.recon_weight, args.info_weight, args.dim_weight, args.topo_weight,args.least_volumes
             )
             pbar.set_description(f"Epoch {epoch+1}/{args.epochs} | Loss: {loss:.4f}")
         os.makedirs(args.model_dir, exist_ok=True)
@@ -501,6 +524,8 @@ def main():
     print("Aggregating and visualizing policy embeddings...")
     image_dir = f"./images/{env_id}/"
     viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d_e{args.epochs}.png")
+    viz_path = viz_path.replace(".png", "_specnorm.png") if args.spec_norm else viz_path
+    viz_path = viz_path.replace(".png", "_leastvol.png") if args.least_volumes else viz_path
     policy_latents = aggregate_and_visualize_policy_embeddings(
         embeddings, policies, args.emb_dim, save_path=viz_path
     )
@@ -543,6 +568,8 @@ def main():
             output_data.append(entry)
 
     json_path = os.path.join(trajectories_directory_path, f"{name_env}_{args.emb_dim}D_l{args.nlayers}_embeddings_e{args.epochs}.json")
+    json_path = json_path.replace(".json", "_specnorm.json") if args.spec_norm else json_path
+    json_path = json_path.replace(".json", "_leastvol.json") if args.least_volumes else json_path
     with open(json_path, "w") as fh:
         json.dump(output_data, fh, indent=2)
     print(f"Saved aggregated policy latents to {json_path}")
