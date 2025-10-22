@@ -423,8 +423,8 @@ def main():
                 obs = np.array(list(states) + [states[-1]], dtype=np.float32)
                 acts = np.array(actions, dtype=np.float32)
                 # print("LEN CHEETAH OBS AND ACTS:", obs.shape, acts.shape)
-                obs = obs[:101]
-                acts = acts[:100]
+                obs = obs[:201]
+                acts = acts[:200]
                 timesteps = obs.shape[0] - 1
                 # print("Truncated HalfCheetah trajectories to length 100 for faster training.")
                 traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
