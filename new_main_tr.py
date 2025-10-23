@@ -13,6 +13,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from torch.utils.data import DataLoader
+from torch.nn.utils import parametrizations as parametrize
+import umap
+from tqdm import tqdm
 
 from imitation.data.types import Trajectory
 from morl_behavior_objective.methods.behaviorencoder import (
@@ -33,7 +36,7 @@ from morl_behavior_objective.methods.behaviorencoder_utils import (
 
 # ---------- Decoder Definition ----------
 class TrajectoryDecoder(nn.Module):
-    def __init__(self, emb_dim, state_dim, action_dim, max_len):
+    def __init__(self, emb_dim, state_dim, action_dim, max_len,spec_norm=False):
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -41,11 +44,11 @@ class TrajectoryDecoder(nn.Module):
         self.out_features = max_len * (state_dim + action_dim)
 
         self.net = nn.Sequential(
-            nn.Linear(emb_dim, 1024),
+            nn.Linear(emb_dim, 1024) if not spec_norm else parametrize.spectral_norm(nn.Linear(emb_dim, 1024)),
             nn.GELU(),
-            nn.Linear(1024, 1024),
+            nn.Linear(1024, 1024) if not spec_norm else parametrize.spectral_norm(nn.Linear(1024, 1024)),
             nn.GELU(),
-            nn.Linear(1024, self.out_features),
+            nn.Linear(1024, self.out_features) if not spec_norm else parametrize.spectral_norm(nn.Linear(1024, self.out_features)),
         )
 
     def forward(self, cls_embedding):
@@ -87,6 +90,13 @@ def extract_scalar_returns(returns):
         else:
             values.append(float(ret))
     return values
+
+def loss_vol_simplified(z_normalized):
+    # z_normalized are the embeddings already on the hypersphere
+    s = z_normalized.std(0)
+    eta = 1e-6
+    # The geometric mean is still a valid measure of spread on the sphere
+    return th.exp(th.log(s + eta).mean())
 
 
 def datasets_preparation_ret(
@@ -130,7 +140,7 @@ def datasets_preparation_ret(
 # ---------- Training & Evaluation ----------
 def train_epoch(
     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-    recon_weight, info_weight, dim_weight, topo_weight
+    recon_weight, info_weight, dim_weight, topo_weight, least_volumes=False
 ):
     encoder.train()
     decoder.train()
@@ -185,12 +195,19 @@ def train_epoch(
                     - F.cosine_similarity(diffs[:-1], diffs[1:], dim=-1).mean()
                 )
 
+        vol_loss = th.tensor(0.0, device=device)
+        vol_weight = 0.0
+        if least_volumes:
+            vol_loss = loss_vol_simplified(cls_emb)
+            vol_weight = topo_weight
+
         # Total Weighted Loss
         loss = (
             recon_weight * recon_loss
             + info_weight * info_loss
             + dim_weight * dim_loss
             + topo_weight * topo_loss
+            + vol_weight * vol_loss
         )
 
         optim.zero_grad()
@@ -211,6 +228,45 @@ def get_all_embeddings(encoder, loader, device):
         all_policies.extend(labels.tolist())
     return np.vstack(all_cls_embs), np.array(all_policies)
 
+def visualize_trajectory_embeddings(embeddings, policies, emb_dim, title="Trajectory Embeddings (pre-aggregation)"):
+    """Visualizes the raw, un-aggregated trajectory embeddings."""
+    if emb_dim < 2:
+        print("Embedding dimension < 2; skipping raw trajectory visualization.")
+        return
+
+    unique_policies = np.unique(policies)
+    palette = sns.color_palette("tab10", n_colors=max(len(unique_policies), 3))
+    color_map = {pid: palette[i % len(palette)] for i, pid in enumerate(unique_policies)}
+    colors = [color_map[pid] for pid in policies]
+
+    fig = plt.figure(figsize=(8, 6))
+    
+    # Use UMAP for dimensionality reduction if emb_dim > 3
+    if emb_dim > 3:
+        print(f"Reducing {emb_dim}D -> 3D with UMAP for raw embedding visualization.")
+        reducer = umap.UMAP(n_components=3, random_state=42)
+        plot_embeddings = reducer.fit_transform(embeddings)
+        ax = fig.add_subplot(111, projection="3d")
+        ax.scatter(plot_embeddings[:, 0], plot_embeddings[:, 1], plot_embeddings[:, 2], c=colors, alpha=0.5)
+        ax.set_xlabel("UMAP Dim 1"); ax.set_ylabel("UMAP Dim 2"); ax.set_zlabel("UMAP Dim 3")
+    elif emb_dim == 3:
+        ax = fig.add_subplot(111, projection="3d")
+        ax.scatter(embeddings[:, 0], embeddings[:, 1], embeddings[:, 2], c=colors, alpha=0.5)
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2"); ax.set_zlabel("Dim 3")
+    else: # emb_dim == 2
+        ax = fig.add_subplot(111)
+        ax.scatter(embeddings[:, 0], embeddings[:, 1], c=colors, alpha=0.5)
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2")
+
+    # Create dummy artists for legend
+    for pid in unique_policies:
+        ax.scatter([], [], c=[color_map[pid]], label=f"Policy {pid}")
+
+    ax.set_title(title)
+    ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5))
+    plt.tight_layout()
+    plt.show()
+
 def aggregate_and_visualize_policy_embeddings(
     embeddings, policies, emb_dim, save_path=None
 ):
@@ -219,8 +275,8 @@ def aggregate_and_visualize_policy_embeddings(
     for pid in unique_policies:
         policy_latents[int(pid)] = embeddings[policies == pid].mean(axis=0)
 
-    if emb_dim < 3:
-        print("Embedding dimension < 3; skipping 3D visualization.")
+    if emb_dim < 2:
+        print("Embedding dimension < 2; skipping aggregated visualization.")
         return policy_latents
 
     agg_embeddings = np.array(list(policy_latents.values()))
@@ -230,17 +286,38 @@ def aggregate_and_visualize_policy_embeddings(
     color_map = {pid: palette[i % len(palette)] for i, pid in enumerate(unique_policies)}
 
     fig = plt.figure(figsize=(8, 6))
-    ax = fig.add_subplot(111, projection="3d")
+    
+    # Handle different dimensions for plotting
+    plot_title = "Aggregated Policy Embeddings"
+    if emb_dim > 3:
+        plot_title = f"Aggregated Policy Embeddings ({emb_dim}D -> 3D via UMAP)"
+        print(f"Reducing {emb_dim}D -> 3D with UMAP for aggregated visualization.")
+        reducer = umap.UMAP(n_components=3, random_state=42)
+        plot_embeddings = reducer.fit_transform(agg_embeddings)
+        ax = fig.add_subplot(111, projection="3d")
+        for i, pid in enumerate(agg_ids):
+            pts = plot_embeddings[i, :]
+            ax.scatter(pts[0], pts[1], pts[2], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], pts[2], str(pid), color='black', fontsize=12, ha='right', va='bottom')
+        ax.set_xlabel("UMAP Dim 1"); ax.set_ylabel("UMAP Dim 2"); ax.set_zlabel("UMAP Dim 3")
+    elif emb_dim == 3:
+        plot_title = "Aggregated Policy Embeddings (3D)"
+        ax = fig.add_subplot(111, projection="3d")
+        for i, pid in enumerate(agg_ids):
+            pts = agg_embeddings[i, :3]
+            ax.scatter(pts[0], pts[1], pts[2], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], pts[2], str(pid), color='black', fontsize=12, ha='right', va='bottom')
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2"); ax.set_zlabel("Dim 3")
+    else: # emb_dim == 2
+        plot_title = "Aggregated Policy Embeddings (2D)"
+        ax = fig.add_subplot(111)
+        for i, pid in enumerate(agg_ids):
+            pts = agg_embeddings[i, :2]
+            ax.scatter(pts[0], pts[1], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], str(pid), color='black', fontsize=12, ha='right', va='bottom')
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2")
 
-    for i, pid in enumerate(agg_ids):
-        pts = agg_embeddings[i, :3]
-        ax.scatter(
-            pts[0], pts[1], pts[2],
-            c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9
-        )
-
-    ax.set_title("Aggregated Policy Embeddings (3D)")
-    ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2"); ax.set_zlabel("Dim 3")
+    ax.set_title(plot_title)
     ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5))
     plt.tight_layout()
 
@@ -252,6 +329,7 @@ def aggregate_and_visualize_policy_embeddings(
 
     return {k: v.tolist() for k, v in policy_latents.items()}
 
+
 # ---------- Main Execution Block ----------
 def main():
     parser = argparse.ArgumentParser()
@@ -260,11 +338,14 @@ def main():
     arg_env.add_argument("-DSTC","--DeepSeaTreasureConcave", help="DeepSeaTreasureConcave environment",action="store_true")
     arg_env.add_argument("-DSTS","--DeepSeaTreasureSmooth", help="DeepSeaTreasureSmooth environment",action="store_true")
     arg_env.add_argument("-DSTLR","--DeepSeaTreasureLeftRight", help="DeepSeaTreasureLeftRight environment",action="store_true")
+    arg_env.add_argument("-MHC","--MOHalfCheetah", help="MO-HalfCheetah environment",action="store_true")
     # Add other envs if needed...
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
-    arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "cpu")
+    arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "mps" if th.backends.mps.is_available() else "cpu")
     arg_hyp.add_argument("--epochs", type=int, default=200)
+    arg_hyp.add_argument("--spec_norm", action="store_true", help="Use spectral normalization in the decoder")
+    arg_hyp.add_argument("--least_volumes", action="store_true", help="Encourage least volume embeddings")
     arg_hyp.add_argument("--batch_size", type=int, default=32)
     arg_hyp.add_argument("--lr", type=float, default=3e-4)
     arg_hyp.add_argument("--emb_dim", type=int, default=3)
@@ -273,10 +354,10 @@ def main():
     arg_hyp.add_argument("--d_hid", type=int, default=1024)
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
     arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
-    arg_hyp.add_argument("--info_weight", type=float, default=0.1)
-    arg_hyp.add_argument("--dim_weight", type=float, default=0.1)
-    arg_hyp.add_argument("--topo_weight", type=float, default=0.2)
-    arg_hyp.add_argument("--temperature", type=float, default=0.1)
+    arg_hyp.add_argument("--info_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--topo_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--temperature", type=float, default=1.0)
     arg_hyp.add_argument("--state_scaler", default="quantile_normal")
     arg_hyp.add_argument("--action_scaler", default="quantile_normal")
     arg_hyp.add_argument("--scaler_fit", default="seen", choices=["seen", "both"])
@@ -292,7 +373,7 @@ def main():
     random.seed(args.seed)
     device = th.device(args.device)
     print(f"Using device: {device}")
-    env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else "UNK"
+    env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else "MHC" if args.MOHalfCheetah else "UNK"
 
     # --- Data Loading and Preparation (from main_morl_BE.py) ---
     if args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth or args.DeepSeaTreasureLeftRight:
@@ -326,8 +407,33 @@ def main():
                 if ret_vec is not None:
                     # Ensure obj_feats_list gets populated for every trajectory, even if return is the same for a policy
                     obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
+    elif args.MOHalfCheetah:
+        name_env = "mo-halfcheetah-v4"
+        trajectories_directory_path = f"trajectories/morld/{name_env}/"
+        num_policies = 31
+        env_id = "mo-halfcheetah-v4"
+
+        trajectories, true_labels, obj_feats_list = [], [], []
+        for i in range(num_policies):
+            file_path = os.path.join(trajectories_directory_path, f"policy_{i}.json")
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            ret_vec = data.get('return', None)
+            for states, actions in data['trajectories']:
+                obs = np.array(list(states) + [states[-1]], dtype=np.float32)
+                acts = np.array(actions, dtype=np.float32)
+                # print("LEN CHEETAH OBS AND ACTS:", obs.shape, acts.shape)
+                obs = obs[:201]
+                acts = acts[:200]
+                timesteps = obs.shape[0] - 1
+                # print("Truncated HalfCheetah trajectories to length 100 for faster training.")
+                traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
+                trajectories.append(traj)
+                true_labels.append(i)
+                if ret_vec is not None:
+                    obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
     else:
-        raise ValueError("Please select a valid environment, e.g., --DeepSeaTreasureConcave")
+        raise ValueError("Please select a valid environment")
 
     all_states_raw = [t.obs for t in trajectories]
     all_actions_raw = [t.acts for t in trajectories]
@@ -351,8 +457,7 @@ def main():
 
     # --- Dataset and DataLoader ---
     all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, norm_trajectories, np.array(true_labels))
-    print("MAXIMUM LENGTH OF TRAJECTORIES:", max_len)
-    
+
     returns_per_traj = []
     policy_map = {i:[] for i in range(num_policies)}
     for i, label in enumerate(true_labels):
@@ -374,13 +479,13 @@ def main():
     num_actions = trajectories[0].acts.shape[1]
 
     encoder = BehaviorEncoderCLSattnSATyped(
-        input_channels=input_coord_dims, cnn_output_dim=args.emb_dim, steps=max_len,
+        input_channels=input_coord_dims, cnn_output_dim=args.emb_dim,steps=max_len, max_len=max_len,
         nhead=args.nheads, d_hid=args.d_hid, emb_dim=args.emb_dim,
         num_actions=num_actions, nlayers=args.nlayers, dropout=args.dropout,
         input_coord_dims=input_coord_dims
     ).to(device)
 
-    decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, num_actions, max_len).to(device)
+    decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, num_actions, max_len,spec_norm=args.spec_norm).to(device)
     info_loss_fn = InstanceLoss(args.temperature, device=device)
     dim_loss_fn = DeepInfoMaxLoss(args.emb_dim).to(device)
 
@@ -388,17 +493,22 @@ def main():
     optim = th.optim.AdamW(params, lr=args.lr)
 
     # --- Training or Loading ---
-    model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_e{args.epochs}.pt"
+    model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_l{args.nlayers}_e{args.epochs}.pt"
+    model_name = model_name.replace(".pt", "_specnorm.pt") if args.spec_norm else model_name
+    model_name = model_name.replace(".pt", "_leastvol.pt") if args.least_volumes else model_name
+    model_name = model_name.replace(".pt", f"_ts{timesteps}.pt") if args.MOHalfCheetah else model_name
     model_path = os.path.join(args.model_dir, model_name)
+    print(encoder.model_type,"parameters ->",sum(p.numel() for p in encoder.parameters() if p.requires_grad)/1e6,"M")
 
     if args.train:
         print(f"Starting training for {args.epochs} epochs...")
-        for epoch in range(args.epochs):
+        pbar = tqdm(range(args.epochs))
+        for epoch in pbar:
             loss = train_epoch(
                 encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-                args.recon_weight, args.info_weight, args.dim_weight, args.topo_weight
+                args.recon_weight, args.info_weight, args.dim_weight, args.topo_weight,args.least_volumes
             )
-            print(f"Epoch {epoch+1}/{args.epochs}: loss={loss:.4f}")
+            pbar.set_description(f"Epoch {epoch+1}/{args.epochs} | Loss: {loss:.4f}")
         os.makedirs(args.model_dir, exist_ok=True)
         th.save({"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()}, model_path)
         print(f"Saved checkpoint to {model_path}")
@@ -413,9 +523,15 @@ def main():
     print("Evaluating embeddings on the full dataset...")
     embeddings, policies = get_all_embeddings(encoder, loader, device)
 
+    print("Visualizing raw trajectory embeddings (pre-aggregation)...")
+    visualize_trajectory_embeddings(embeddings, policies, args.emb_dim)
+
     print("Aggregating and visualizing policy embeddings...")
     image_dir = f"./images/{env_id}/"
-    viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d.png")
+    viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d_e{args.epochs}.png")
+    viz_path = viz_path.replace(".png", "_specnorm.png") if args.spec_norm else viz_path
+    viz_path = viz_path.replace(".png", "_leastvol.png") if args.least_volumes else viz_path
+    viz_path = viz_path.replace(".png", f"_ts{timesteps}.png") if args.MOHalfCheetah else viz_path
     policy_latents = aggregate_and_visualize_policy_embeddings(
         embeddings, policies, args.emb_dim, save_path=viz_path
     )
@@ -457,10 +573,15 @@ def main():
             }
             output_data.append(entry)
 
-    json_path = os.path.join(trajectories_directory_path, f"{name_env}_{args.emb_dim}D_embeddings.json")
+    json_path = os.path.join(trajectories_directory_path, f"{name_env}_{args.emb_dim}D_l{args.nlayers}_embeddings_e{args.epochs}.json")
+    json_path = json_path.replace(".json", "_specnorm.json") if args.spec_norm else json_path
+    json_path = json_path.replace(".json", "_leastvol.json") if args.least_volumes else json_path
+    json_path = json_path.replace(".json", f"_ts{timesteps}.json") if args.MOHalfCheetah else json_path
     with open(json_path, "w") as fh:
         json.dump(output_data, fh, indent=2)
     print(f"Saved aggregated policy latents to {json_path}")
+
+
 
 
 if __name__ == "__main__":

@@ -754,7 +754,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
                             sigma: float = 10.0,
                             learnable_proj: bool = False) -> nn.Module:
         """
-        kind ∈ {'det','scaled','gaussian'}
+        kind \in {'det','scaled','gaussian'}
         """
         kind = kind.lower()
         if kind == 'det':
