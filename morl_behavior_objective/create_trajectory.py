@@ -7,7 +7,7 @@ import numpy as np
 import mo_gymnasium as mo_gym
 import torch as th  # for checkpoint inspection/manual load
 
-from gymnasium.wrappers import FlattenObservation
+from gymnasium.wrappers import FlattenObservation, TimeLimit
 
 from morl_baselines.common.weights import equally_spaced_weights
 from morl_baselines.common.pareto import filter_pareto_dominated
@@ -25,10 +25,11 @@ MODE = "morld"  # "gpi" or "morld"
 ENV_ID = "mo-halfcheetah-v4"   # works for both discrete/continuous, we detect action space at runtime
 GAMMA = 0.99
 SEED = 0
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 # GPI settings
-GPI_CHECKPOINT = os.path.join(SCRIPT_DIR, "..", "trained_policies", "conditional_policy", "GPI_cheetah.tar")
+GPI_CHECKPOINT = os.path.join(SCRIPT_DIR, "trained_policies", "conditional_policy", "GPI_cheetah.tar")
 NUM_SAMPLE_WEIGHTS = 100
 NUM_EVAL_EPISODES_FOR_FRONT = 10
 EPISODES_PER_WEIGHT = 50
@@ -36,10 +37,10 @@ GPI_OUTPUT_DIR = os.path.join("trajectories", "gpi", ENV_ID)
 SAVE_GPI_PICKLES = True  # save whole_front, pareto_front, pareto_weights
 
 # MORLD settings
-MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "..", "trained_policies", "multi_policy", "morld_cheetah.tar")
+MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "MORL_policies","morld_cheetah_v5","seed0.tar")
 LOAD_MORLD_REPLAY = False
 EPISODES_PER_POLICY = 50
-MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", ENV_ID)
+MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f'{ENV_ID}_100steps')
 # =======================================================
 
 # -------------------- JSON helpergit st --------------------
@@ -314,7 +315,9 @@ def run_morld():
     os.makedirs(MORLD_OUTPUT_DIR, exist_ok=True)
 
     env = mo_gym.make(ENV_ID)
+    env = TimeLimit(env, max_episode_steps=100)
     eval_env = mo_gym.make(ENV_ID)
+    eval_env = TimeLimit(eval_env, max_episode_steps=100)   
 
     if "highway" in ENV_ID:
         env = FlattenObservation(env)
