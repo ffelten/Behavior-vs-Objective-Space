@@ -342,6 +342,7 @@ def main():
     # Add other envs if needed...
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
+    arg_hyp.add_argument("--shorter",action="store_true", help="Use shorter trajectories for halfcheetah")
     arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "mps" if th.backends.mps.is_available() else "cpu")
     arg_hyp.add_argument("--epochs", type=int, default=200)
     arg_hyp.add_argument("--spec_norm", action="store_true", help="Use spectral normalization in the decoder")
@@ -408,10 +409,10 @@ def main():
                     # Ensure obj_feats_list gets populated for every trajectory, even if return is the same for a policy
                     obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
     elif args.MOHalfCheetah:
-        name_env = "mo-halfcheetah-v4"
+        name_env = "mo-halfcheetah-v4" if not args.shorter else "mo-halfcheetah-v4_100steps"
         trajectories_directory_path = f"trajectories/morld/{name_env}/"
-        num_policies = 31
-        env_id = "mo-halfcheetah-v4"
+        num_policies = 31 if not args.shorter else 80
+        env_id = "mo-halfcheetah-v4" if not args.shorter else "mo-halfcheetah-v4_100steps"
 
         trajectories, true_labels, obj_feats_list = [], [], []
         for i in range(num_policies):
@@ -423,9 +424,12 @@ def main():
                 obs = np.array(list(states) + [states[-1]], dtype=np.float32)
                 acts = np.array(actions, dtype=np.float32)
                 # print("LEN CHEETAH OBS AND ACTS:", obs.shape, acts.shape)
-                obs = obs[:201]
-                acts = acts[:200]
-                timesteps = obs.shape[0] - 1
+                if not args.shorter:
+                    obs = obs[:201]
+                    acts = acts[:200]
+                    timesteps = obs.shape[0] - 1
+                else:
+                    timesteps = 100
                 # print("Truncated HalfCheetah trajectories to length 100 for faster training.")
                 traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
                 trajectories.append(traj)
@@ -497,6 +501,7 @@ def main():
     model_name = model_name.replace(".pt", "_specnorm.pt") if args.spec_norm else model_name
     model_name = model_name.replace(".pt", "_leastvol.pt") if args.least_volumes else model_name
     model_name = model_name.replace(".pt", f"_ts{timesteps}.pt") if args.MOHalfCheetah else model_name
+    model_name = model_name.replace(".pt", "_shorter.pt") if args.shorter else model_name
     model_path = os.path.join(args.model_dir, model_name)
     print(encoder.model_type,"parameters ->",sum(p.numel() for p in encoder.parameters() if p.requires_grad)/1e6,"M")
 
