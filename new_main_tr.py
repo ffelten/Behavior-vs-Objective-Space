@@ -140,7 +140,7 @@ def datasets_preparation_ret(
 # ---------- Training & Evaluation ----------
 def train_epoch(
     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-    recon_weight, info_weight, dim_weight, topo_weight, least_volumes=False
+    recon_weight, info_weight, dim_weight, vol_weight, least_volumes=False
 ):
     encoder.train()
     decoder.train()
@@ -176,37 +176,35 @@ def train_epoch(
         dim_loss = dim_loss_fn(cls_emb, all_tokens[:, 1:, :], interleaved_mask) # Exclude CLS from local tokens
 
         # Topology Loss
-        topo_loss = th.tensor(0.0, device=device)
-        return_vals = extract_scalar_returns(returns)
-        if return_vals is not None and len(return_vals) >= 3:
-            ret_tensor = th.tensor(return_vals, device=device, dtype=th.float32)
-            # Sort embeddings based on their scalar return
-            order = th.argsort(ret_tensor)
+        # topo_loss = th.tensor(0.0, device=device)
+        # return_vals = extract_scalar_returns(returns)
+        # if return_vals is not None and len(return_vals) >= 3:
+        #     ret_tensor = th.tensor(return_vals, device=device, dtype=th.float32)
+        #     # Sort embeddings based on their scalar return
+        #     order = th.argsort(ret_tensor)
             
-            # Calculate difference vectors between adjacent embeddings in the sorted sequence
-            diffs = cls_emb[order[1:]] - cls_emb[order[:-1]]
+        #     # Calculate difference vectors between adjacent embeddings in the sorted sequence
+        #     diffs = cls_emb[order[1:]] - cls_emb[order[:-1]]
             
-            if diffs.size(0) > 1:
-                # Penalize deviations from a straight line by maximizing cosine similarity
-                # between consecutive difference vectors.
-                # 1 - cos(theta) is minimized when theta is 0 (vectors are parallel).
-                topo_loss = (
-                    1.0
-                    - F.cosine_similarity(diffs[:-1], diffs[1:], dim=-1).mean()
-                )
+        #     if diffs.size(0) > 1:
+        #         # Penalize deviations from a straight line by maximizing cosine similarity
+        #         # between consecutive difference vectors.
+        #         # 1 - cos(theta) is minimized when theta is 0 (vectors are parallel).
+        #         topo_loss = (
+        #             1.0
+        #             - F.cosine_similarity(diffs[:-1], diffs[1:], dim=-1).mean()
+        #         )
 
         vol_loss = th.tensor(0.0, device=device)
-        vol_weight = 0.0
         if least_volumes:
             vol_loss = loss_vol_simplified(cls_emb)
-            vol_weight = topo_weight
 
         # Total Weighted Loss
         loss = (
             recon_weight * recon_loss
             + info_weight * info_loss
             + dim_weight * dim_loss
-            + topo_weight * topo_loss
+            # + topo_weight * topo_loss
             + vol_weight * vol_loss
         )
 
@@ -370,12 +368,12 @@ def main():
     arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
-    arg_hyp.add_argument("--topo_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--topo_weight", type=float, default=0.0)
     arg_hyp.add_argument("--temperature", type=float, default=1.0)
     arg_hyp.add_argument("--state_scaler", default="quantile_normal")
     arg_hyp.add_argument("--action_scaler", default="quantile_normal")
     arg_hyp.add_argument("--scaler_fit", default="seen", choices=["seen", "both"])
-    arg_hyp.add_argument("--model_dir", default="models/")
+    arg_hyp.add_argument("--model_dir", default="models/no_topo/")
     arg_hyp.add_argument("--model_prefix", default="be")
     arg_hyp.add_argument("--train", action="store_true")
     arg_hyp.add_argument("--seed", type=int, default=0)
@@ -394,11 +392,15 @@ def main():
         if args.DeepSeaTreasureLeftRight:
             name_env = "left_right_dst"
             trajectories_directory_path = f"trajectories/{name_env}/"
+            embeddings_folder_path = trajectories_directory_path + "embeddings/"
+            os.makedirs(embeddings_folder_path, exist_ok=True)
             num_policies = 6
             env_id = "left-right-dst-v0"
         else: # Concave or Smooth
             name_env = "dst_concave" if args.DeepSeaTreasureConcave else "smooth"
             trajectories_directory_path = f"trajectories/{name_env}/"
+            embeddings_folder_path = trajectories_directory_path + "embeddings/"
+            os.makedirs(embeddings_folder_path, exist_ok=True)
             num_policies = 10
             env_id = "deep-sea-treasure-v0" if args.DeepSeaTreasureConcave else "dst-smooth-v0"
 
@@ -424,6 +426,8 @@ def main():
     elif args.MOHalfCheetah:
         name_env = "mo-halfcheetah-v4" if not args.shorter else "mo-halfcheetah-v4_100steps"
         trajectories_directory_path = f"trajectories/morld/{name_env}/"
+        embeddings_folder_path = trajectories_directory_path + "embeddings/"
+        os.makedirs(embeddings_folder_path, exist_ok=True)
         num_policies = 31 if not args.shorter else 80
         env_id = "mo-halfcheetah-v4" if not args.shorter else "mo-halfcheetah-v4_100steps"
 
@@ -548,7 +552,8 @@ def main():
         visualize_trajectory_embeddings(embeddings, policies, args.emb_dim, highlight_pids=args.viz_policy_ids)
 
     print("Aggregating and visualizing policy embeddings...")
-    image_dir = f"./images/{env_id}/"
+    image_dir = f"./images/no_topo/{env_id}/"
+    os.makedirs(image_dir, exist_ok=True)
     viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d_e{args.epochs}.png")
     viz_path = viz_path.replace(".png", "_specnorm.png") if args.spec_norm else viz_path
     viz_path = viz_path.replace(".png", "_leastvol.png") if args.least_volumes else viz_path
@@ -594,10 +599,11 @@ def main():
             }
             output_data.append(entry)
 
-    json_path = os.path.join(trajectories_directory_path, f"{name_env}_{args.emb_dim}D_l{args.nlayers}_embeddings_e{args.epochs}.json")
+    json_path = os.path.join(embeddings_folder_path, f"{name_env}_{args.emb_dim}D_l{args.nlayers}_embeddings_e{args.epochs}.json")
     json_path = json_path.replace(".json", "_specnorm.json") if args.spec_norm else json_path
     json_path = json_path.replace(".json", "_leastvol.json") if args.least_volumes else json_path
     json_path = json_path.replace(".json", f"_ts{timesteps}.json") if args.MOHalfCheetah else json_path
+    json_path = json_path.replace(".json", "_shorter.json") if args.shorter else json_path
     with open(json_path, "w") as fh:
         json.dump(output_data, fh, indent=2)
     print(f"Saved aggregated policy latents to {json_path}")
