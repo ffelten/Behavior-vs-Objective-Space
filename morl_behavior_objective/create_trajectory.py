@@ -18,7 +18,7 @@ from morl_baselines.multi_policy.morld.morld import MORLD
 MODE = "morld"  # "gpi" or "morld"
 
 # Common
-ENV_ID = "mo-halfcheetah-v4"   # works for both discrete/continuous, we detect action space at runtime
+ENV_ID = "mo-highway-fast-v0"   # works for both discrete/continuous, we detect action space at runtime
 GAMMA = 0.99
 SEED = 0
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -26,12 +26,30 @@ SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # MORLD settings
-MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "MORL_policies","morld_cheetah_v5","seed0.tar")
+MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "MORL_policies","mo-highway-fast-v0","seed0.tar")
 LOAD_MORLD_REPLAY = False
 EPISODES_PER_POLICY = 50
 MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f'{ENV_ID}_100steps_test')
 # =======================================================
-
+params = {
+    "algo": "morld",
+    "env_id": "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
+    "num_timesteps": 1_000_000,
+    "gamma": 0.99,
+    "ref_point": [-1, -1, -40],  # [-100, -100],
+    "seed": 0,
+    "wandb_entity": "florian-felten",
+    "init_hyperparams": {
+        "scalarization_method": "ws",
+        "evaluation_mode": "ser",
+        "policy_name": "MOSACDiscrete",  # "MOSAC",
+        "shared_buffer": False,
+        "weight_adaptation_method": None,
+        "exchange_every": 10_000,
+    },
+    "train_hyperparams": {},
+    "save_dic": "weights",
+}
 # -------------------- JSON helpergit st --------------------
 def make_json_safe(obj):
     """
@@ -118,16 +136,16 @@ def run_morld():
     os.makedirs(MORLD_OUTPUT_DIR, exist_ok=True)
 
     env = mo_gym.make(ENV_ID)
-    env = TimeLimit(env, max_episode_steps=100)
     eval_env = mo_gym.make(ENV_ID)
-    eval_env = TimeLimit(eval_env, max_episode_steps=100)   
 
-    if "highway" in ENV_ID:
+    if "mo-halfcheetah" in ENV_ID:
+        env = TimeLimit(env, max_episode_steps=100)
+        eval_env = TimeLimit(eval_env, max_episode_steps=100)
+    if "mo-highway-fast-v0" in ENV_ID:
         env = FlattenObservation(env)
         eval_env = FlattenObservation(eval_env)
 
-
-    agent = MORLD(env=eval_env, gamma=GAMMA, log=False, seed=SEED)
+    agent = MORLD(env=eval_env, gamma=params["gamma"], log=False, seed=params["seed"], **params["init_hyperparams"])
     agent.load(MORLD_CHECKPOINT, load_replay_buffer=LOAD_MORLD_REPLAY)
 
     if not hasattr(agent, "archive") or len(agent.archive.individuals) == 0:
