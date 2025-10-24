@@ -11,16 +11,16 @@ from morl_baselines.multi_policy.morld.morld import MORLD
 
 params = {
     "algo": "morld",
-    "env_id": "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
+    "env_id": "mo-hopper-v5",  # "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
     "num_timesteps": 1_000_000,
     "gamma": 0.99,
-    "ref_point": [-1, -1, -40],  # [-100, -100],
+    "ref_point": [-100, -100, -100],  # [-1, -1, -40],  # [-100, -100],
     "seed": 0,
     "wandb_entity": "florian-felten",
     "init_hyperparams": {
         "scalarization_method": "ws",
         "evaluation_mode": "ser",
-        "policy_name": "MOSACDiscrete",  # "MOSAC",
+        "policy_name": "MOSAC",  # "MOSACDiscrete",  # "MOSAC",
         "shared_buffer": False,
         "weight_adaptation_method": None,
         "exchange_every": 10_000,
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     seed_everything(params["seed"])
 
     # ---- ENVIRONMENT ----
-    if "mo-halfcheetah" in params["env_id"].lower():
+    if "mo-halfcheetah" in params["env_id"].lower() or "mo-hopper" in params["env_id"].lower():
         env = mo_gym.make(params["env_id"])
         env = TimeLimit(env, max_episode_steps=100)
         eval_env = mo_gym.make(
@@ -52,7 +52,7 @@ if __name__ == "__main__":
         eval_env = FlattenObservation(eval_env)
     else:
         raise ValueError(
-            f"Environment {params['env_id']} not supported, only 'mo-halfcheetah' and 'highway' are supported"
+            f"Environment {params['env_id']} not supported, only 'mo-halfcheetah', 'mo-hopper' and 'highway' are supported"
         )
     env = MORecordEpisodeStatistics(env, gamma=params["gamma"])
 
