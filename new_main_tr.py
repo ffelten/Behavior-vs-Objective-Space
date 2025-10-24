@@ -228,7 +228,7 @@ def get_all_embeddings(encoder, loader, device):
         all_policies.extend(labels.tolist())
     return np.vstack(all_cls_embs), np.array(all_policies)
 
-def visualize_trajectory_embeddings(embeddings, policies, emb_dim, title="Trajectory Embeddings (pre-aggregation)"):
+def visualize_trajectory_embeddings(embeddings, policies, emb_dim, title="Trajectory Embeddings (pre-aggregation)", highlight_pids=None):
     """Visualizes the raw, un-aggregated trajectory embeddings."""
     if emb_dim < 2:
         print("Embedding dimension < 2; skipping raw trajectory visualization.")
@@ -241,6 +241,7 @@ def visualize_trajectory_embeddings(embeddings, policies, emb_dim, title="Trajec
 
     fig = plt.figure(figsize=(8, 6))
     
+    plot_embeddings = embeddings
     # Use UMAP for dimensionality reduction if emb_dim > 3
     if emb_dim > 3:
         print(f"Reducing {emb_dim}D -> 3D with UMAP for raw embedding visualization.")
@@ -257,6 +258,17 @@ def visualize_trajectory_embeddings(embeddings, policies, emb_dim, title="Trajec
         ax = fig.add_subplot(111)
         ax.scatter(embeddings[:, 0], embeddings[:, 1], c=colors, alpha=0.5)
         ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2")
+
+    # Add labels for highlighted policies
+    if highlight_pids is not None:
+        print(f"Highlighting policy IDs: {highlight_pids}")
+        for i, pid in enumerate(policies):
+            if pid in highlight_pids:
+                point = plot_embeddings[i]
+                if emb_dim == 2:
+                    ax.text(point[0], point[1], str(pid), color='black', fontsize=9, ha='center', va='center', weight='bold')
+                else: # 3D or UMAP 3D
+                    ax.text(point[0], point[1], point[2], str(pid), color='black', fontsize=9, ha='center', va='center', weight='bold')
 
     # Create dummy artists for legend
     for pid in unique_policies:
@@ -343,6 +355,7 @@ def main():
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
     arg_hyp.add_argument("--shorter",action="store_true", help="Use shorter trajectories for halfcheetah")
+    arg_hyp.add_argument("--viz_policy_ids", type=int, nargs='+', default=None, help="List of policy IDs to label in the pre-aggregation visualization.")
     arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "mps" if th.backends.mps.is_available() else "cpu")
     arg_hyp.add_argument("--epochs", type=int, default=200)
     arg_hyp.add_argument("--spec_norm", action="store_true", help="Use spectral normalization in the decoder")
@@ -530,6 +543,9 @@ def main():
 
     print("Visualizing raw trajectory embeddings (pre-aggregation)...")
     visualize_trajectory_embeddings(embeddings, policies, args.emb_dim)
+    if args.viz_policy_ids is not None:
+        print(f"Visualizing raw trajectory embeddings (pre-aggregation) highlighting policy {args.viz_policy_ids}...")
+        visualize_trajectory_embeddings(embeddings, policies, args.emb_dim, highlight_pids=args.viz_policy_ids)
 
     print("Aggregating and visualizing policy embeddings...")
     image_dir = f"./images/{env_id}/"
