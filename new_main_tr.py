@@ -94,9 +94,42 @@ def extract_scalar_returns(returns):
 def loss_vol_simplified(z_normalized):
     # z_normalized are the embeddings already on the hypersphere
     s = z_normalized.std(0)
-    eta = 1e-6
+    eta = 1e-6  # Small constant to avoid log(0)
     # The geometric mean is still a valid measure of spread on the sphere
     return th.exp(th.log(s + eta).mean())
+
+def uniformity_loss(z):
+    """
+    Encourages embeddings to be uniformly distributed on the hypersphere.
+    This is achieved by maximizing the pairwise distance, which is equivalent to
+    minimizing the pairwise cosine similarity.
+    Assumes z is already L2-normalized.
+    """
+    # z shape: [B, emb_dim]
+    # Calculate cosine similarity matrix
+    sim_matrix = th.matmul(z, z.T)
+    
+    # We want to minimize the similarity between non-identical examples.
+    # We can do this by taking the sum of the off-diagonal elements.
+    # A simpler way that works well is to just minimize the mean of the whole matrix.
+    # The diagonal will be all 1s, but as B gets larger, their contribution to the mean
+    # becomes small. The model learns to make the off-diagonals as small as possible.
+    return sim_matrix.mean()
+
+def decorrelation_loss(z):
+    """
+    Encourages different dimensions of the embeddings to be uncorrelated.
+    Assumes z is centered (mean=0) across the batch.
+    """
+    # z shape: [B, emb_dim]
+    z = z - z.mean(dim=0) # Center the batch
+    cov_matrix = (z.T @ z) / (len(z) - 1) # [emb_dim, emb_dim]
+    
+    # We want the off-diagonal elements to be zero.
+    # Penalize the sum of the squares of the off-diagonal elements.
+    off_diag_mask = ~th.eye(z.shape[1], dtype=th.bool, device=z.device)
+    loss = cov_matrix[off_diag_mask].pow(2).sum() / z.shape[1]
+    return loss
 
 
 def datasets_preparation_ret(
@@ -140,7 +173,7 @@ def datasets_preparation_ret(
 # ---------- Training & Evaluation ----------
 def train_epoch(
     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-    recon_weight, info_weight, dim_weight, vol_weight, least_volumes=False
+    recon_weight, info_weight, dim_weight, vol_weight, uni_weight=0.0,decorr_weight=0.0, least_volumes=False
 ):
     encoder.train()
     decoder.train()
@@ -175,7 +208,7 @@ def train_epoch(
         interleaved_mask = expand_interleaved_mask(masks)
         dim_loss = dim_loss_fn(cls_emb, all_tokens[:, 1:, :], interleaved_mask) # Exclude CLS from local tokens
 
-        # Topology Loss
+        # OLD Topology Loss
         # topo_loss = th.tensor(0.0, device=device)
         # return_vals = extract_scalar_returns(returns)
         # if return_vals is not None and len(return_vals) >= 3:
@@ -195,6 +228,9 @@ def train_epoch(
         #             - F.cosine_similarity(diffs[:-1], diffs[1:], dim=-1).mean()
         #         )
 
+        uni_loss = uniformity_loss(cls_emb) if uni_weight > 0.0 else th.tensor(0.0, device=device)
+        decorr_loss = decorrelation_loss(cls_emb) if decorr_weight > 0.0 else th.tensor(0.0, device=device)
+
         vol_loss = th.tensor(0.0, device=device)
         if least_volumes:
             vol_loss = loss_vol_simplified(cls_emb)
@@ -204,9 +240,11 @@ def train_epoch(
             recon_weight * recon_loss
             + info_weight * info_loss
             + dim_weight * dim_loss
-            # + topo_weight * topo_loss
+            + uni_weight * uni_loss
             + vol_weight * vol_loss
+            + decorr_weight * decorr_loss
         )
+        # print(f"Reconstruction Loss: {recon_weight*recon_loss:.4f}, InfoNCE Loss: {info_weight*info_loss:.4f}, DIM Loss: {dim_weight*dim_loss:.4f}, Total Loss: {loss:.4f}")
 
         optim.zero_grad()
         loss.backward()
@@ -365,7 +403,7 @@ def main():
     arg_hyp.add_argument("--nlayers", type=int, default=1)
     arg_hyp.add_argument("--d_hid", type=int, default=1024)
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
-    arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--recon_weight", type=float, default=0.1)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
     arg_hyp.add_argument("--topo_weight", type=float, default=0.0)
