@@ -98,23 +98,21 @@ def loss_vol_simplified(z_normalized):
     # The geometric mean is still a valid measure of spread on the sphere
     return th.exp(th.log(s + eta).mean())
 
-def uniformity_loss(z):
+def pole_penalty_loss(z):
     """
-    Encourages embeddings to be uniformly distributed on the hypersphere.
-    This is achieved by maximizing the pairwise distance, which is equivalent to
-    minimizing the pairwise cosine similarity.
-    Assumes z is already L2-normalized.
+    Penalizes embeddings for having one dimension dominate the others.
+    This discourages points from clustering at the poles of the hypersphere.
+    Assumes z is L2-normalized.
     """
     # z shape: [B, emb_dim]
-    # Calculate cosine similarity matrix
-    sim_matrix = th.matmul(z, z.T)
+    # For each embedding, find the maximum absolute value across its dimensions.
+    # A value close to 1.0 means it's near a pole.
+    max_abs_vals, _ = th.max(th.abs(z), dim=1)
     
-    # We want to minimize the similarity between non-identical examples.
-    # We can do this by taking the sum of the off-diagonal elements.
-    # A simpler way that works well is to just minimize the mean of the whole matrix.
-    # The diagonal will be all 1s, but as B gets larger, their contribution to the mean
-    # becomes small. The model learns to make the off-diagonals as small as possible.
-    return sim_matrix.mean()
+    # The loss is the mean of these maximum values. Minimizing this pushes
+    # points away from the poles.
+    return max_abs_vals.mean()
+
 
 def decorrelation_loss(z):
     """
@@ -173,7 +171,7 @@ def datasets_preparation_ret(
 # ---------- Training & Evaluation ----------
 def train_epoch(
     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-    recon_weight, info_weight, dim_weight, vol_weight, uni_weight=0.0,decorr_weight=0.0, least_volumes=False
+    recon_weight, info_weight, dim_weight, vol_weight, decorr_weight=0.0, least_volumes=False
 ):
     encoder.train()
     decoder.train()
@@ -228,9 +226,9 @@ def train_epoch(
         #             - F.cosine_similarity(diffs[:-1], diffs[1:], dim=-1).mean()
         #         )
 
-        uni_loss = uniformity_loss(cls_emb) if uni_weight > 0.0 else th.tensor(0.0, device=device)
         decorr_loss = decorrelation_loss(cls_emb) if decorr_weight > 0.0 else th.tensor(0.0, device=device)
-
+        pole_weight = 1.0
+        pole_loss = pole_penalty_loss(cls_emb) 
         vol_loss = th.tensor(0.0, device=device)
         if least_volumes:
             vol_loss = loss_vol_simplified(cls_emb)
@@ -240,9 +238,9 @@ def train_epoch(
             recon_weight * recon_loss
             + info_weight * info_loss
             + dim_weight * dim_loss
-            + uni_weight * uni_loss
             + vol_weight * vol_loss
             + decorr_weight * decorr_loss
+            # + pole_weight * pole_loss
         )
         # print(f"Reconstruction Loss: {recon_weight*recon_loss:.4f}, InfoNCE Loss: {info_weight*info_loss:.4f}, DIM Loss: {dim_weight*dim_loss:.4f}, Total Loss: {loss:.4f}")
 
@@ -400,14 +398,15 @@ def main():
     arg_hyp.add_argument("--lr", type=float, default=3e-4)
     arg_hyp.add_argument("--emb_dim", type=int, default=3)
     arg_hyp.add_argument("--nheads", type=int, default=3)
-    arg_hyp.add_argument("--nlayers", type=int, default=1)
+    arg_hyp.add_argument("--nlayers", type=int, default=2)
     arg_hyp.add_argument("--d_hid", type=int, default=1024)
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
     arg_hyp.add_argument("--recon_weight", type=float, default=0.1)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
-    arg_hyp.add_argument("--topo_weight", type=float, default=0.0)
-    arg_hyp.add_argument("--temperature", type=float, default=1.0)
+    arg_hyp.add_argument("--vol_weight", type=float, default=0.0)
+    arg_hyp.add_argument("--decorr_weight", type=float, default=0.0)
+    arg_hyp.add_argument("--temperature", type=float, default=0.1)
     arg_hyp.add_argument("--state_scaler", default="quantile_normal")
     arg_hyp.add_argument("--action_scaler", default="quantile_normal")
     arg_hyp.add_argument("--scaler_fit", default="seen", choices=["seen", "both"])
@@ -553,6 +552,8 @@ def main():
 
     # --- Training or Loading ---
     model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_l{args.nlayers}_e{args.epochs}.pt"
+    model_name = model_name.replace(".pt", f"_decorr{int(args.decorr_weight)}.pt")  if args.decorr_weight > 0.0 else model_name
+    model_name = model_name.replace(".pt", f"_lower_t.pt") if args.temperature ==0.1 else  model_name.replace(".pt", f"_two_t.pt") if args.temperature ==0.2 else model_name.replace(".pt", f"_pf_t.pt") if args.temperature ==0.15 else model_name
     model_name = model_name.replace(".pt", "_specnorm.pt") if args.spec_norm else model_name
     model_name = model_name.replace(".pt", "_leastvol.pt") if args.least_volumes else model_name
     model_name = model_name.replace(".pt", f"_ts{timesteps}.pt") if args.MOHalfCheetah else model_name
@@ -566,7 +567,7 @@ def main():
         for epoch in pbar:
             loss = train_epoch(
                 encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-                args.recon_weight, args.info_weight, args.dim_weight, args.topo_weight,args.least_volumes
+                args.recon_weight, args.info_weight, args.dim_weight, args.vol_weight, args.decorr_weight, args.least_volumes
             )
             pbar.set_description(f"Epoch {epoch+1}/{args.epochs} | Loss: {loss:.4f}")
         os.makedirs(args.model_dir, exist_ok=True)
@@ -593,6 +594,8 @@ def main():
     image_dir = f"./images/no_topo/{env_id}/"
     os.makedirs(image_dir, exist_ok=True)
     viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d_e{args.epochs}.png")
+    viz_path = viz_path.replace(".png", f"_decorr{int(args.decorr_weight)}.png") if args.decorr_weight > 0.0 else viz_path
+    viz_path = viz_path.replace(".png", f"_lower_t.png") if args.temperature == 0.1 else viz_path.replace(".png", f"_two_t.png") if args.temperature == 0.2 else viz_path.replace(".png", f"_pf_t.png") if args.temperature == 0.15 else viz_path
     viz_path = viz_path.replace(".png", "_specnorm.png") if args.spec_norm else viz_path
     viz_path = viz_path.replace(".png", "_leastvol.png") if args.least_volumes else viz_path
     viz_path = viz_path.replace(".png", f"_ts{timesteps}.png") if args.MOHalfCheetah else viz_path
@@ -638,6 +641,8 @@ def main():
             output_data.append(entry)
 
     json_path = os.path.join(embeddings_folder_path, f"{name_env}_{args.emb_dim}D_l{args.nlayers}_embeddings_e{args.epochs}.json")
+    json_path = json_path.replace(".json", f"_decorr{int(args.decorr_weight)}.json") if args.decorr_weight > 0.0 else json_path
+    json_path = json_path.replace(".json", f"_lower_t.json") if args.temperature == 0.1 else json_path.replace(".json", f"_two_t.json") if args.temperature == 0.2 else json_path.replace(".json", f"_pf_t.json") if args.temperature == 0.15 else json_path
     json_path = json_path.replace(".json", "_specnorm.json") if args.spec_norm else json_path
     json_path = json_path.replace(".json", "_leastvol.json") if args.least_volumes else json_path
     json_path = json_path.replace(".json", f"_ts{timesteps}.json") if args.MOHalfCheetah else json_path
