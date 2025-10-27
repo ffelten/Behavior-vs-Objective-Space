@@ -406,7 +406,7 @@ def main():
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
     arg_hyp.add_argument("--vol_weight", type=float, default=0.0)
     arg_hyp.add_argument("--decorr_weight", type=float, default=0.0)
-    arg_hyp.add_argument("--temperature", type=float, default=0.01)
+    arg_hyp.add_argument("--temperature", type=float, default=0.2)
     arg_hyp.add_argument("--state_scaler", default="quantile_normal")
     arg_hyp.add_argument("--action_scaler", default="quantile_normal")
     arg_hyp.add_argument("--scaler_fit", default="seen", choices=["seen", "both"])
@@ -553,7 +553,7 @@ def main():
     # --- Training or Loading ---
     model_name = f"{args.model_prefix}_{env_code}_{args.emb_dim}d_{args.nheads}h_l{args.nlayers}_e{args.epochs}.pt"
     model_name = model_name.replace(".pt", f"_decorr{int(args.decorr_weight)}.pt")  if args.decorr_weight > 0.0 else model_name
-    model_name = model_name.replace(".pt", f"_lower_t.pt") if args.temperature ==0.1 else  model_name.replace(".pt", f"_two_t.pt") if args.temperature ==0.2 else model_name.replace(".pt", f"_pf_t.pt") if args.temperature ==0.15 else model_name.replace(".pt", f"_lowest_t.pt") if args.temperature ==0.01 else model_name
+    model_name = model_name.replace(".pt", f"_lower_t.pt") if args.temperature ==0.1 else  model_name.replace(".pt", f"_two_t.pt") if args.temperature ==0.2 else model_name.replace(".pt", f"_pf_t.pt") if args.temperature ==0.15 else model_name.replace(".pt", f"_h_t.pt") if args.temperature ==0.125 else model_name
     model_name = model_name.replace(".pt", "_specnorm.pt") if args.spec_norm else model_name
     model_name = model_name.replace(".pt", "_leastvol.pt") if args.least_volumes else model_name
     model_name = model_name.replace(".pt", f"_ts{timesteps}.pt") if args.MOHalfCheetah else model_name
@@ -595,7 +595,7 @@ def main():
     os.makedirs(image_dir, exist_ok=True)
     viz_path = os.path.join(image_dir, f"aggregated_embeddings_{args.emb_dim}d_e{args.epochs}.png")
     viz_path = viz_path.replace(".png", f"_decorr{int(args.decorr_weight)}.png") if args.decorr_weight > 0.0 else viz_path
-    viz_path = viz_path.replace(".png", f"_lower_t.png") if args.temperature == 0.1 else viz_path.replace(".png", f"_two_t.png") if args.temperature == 0.2 else viz_path.replace(".png", f"_pf_t.png") if args.temperature == 0.15 else viz_path.replace(".png", f"_lowest_t.png") if args.temperature == 0.01 else viz_path
+    viz_path = viz_path.replace(".png", f"_lower_t.png") if args.temperature == 0.1 else viz_path.replace(".png", f"_two_t.png") if args.temperature == 0.2 else viz_path.replace(".png", f"_pf_t.png") if args.temperature == 0.15 else viz_path.replace(".png", f"_h_t.png") if args.temperature == 0.125 else viz_path
     viz_path = viz_path.replace(".png", "_specnorm.png") if args.spec_norm else viz_path
     viz_path = viz_path.replace(".png", "_leastvol.png") if args.least_volumes else viz_path
     viz_path = viz_path.replace(".png", f"_ts{timesteps}.png") if args.MOHalfCheetah else viz_path
@@ -642,7 +642,7 @@ def main():
 
     json_path = os.path.join(embeddings_folder_path, f"{name_env}_{args.emb_dim}D_l{args.nlayers}_embeddings_e{args.epochs}.json")
     json_path = json_path.replace(".json", f"_decorr{int(args.decorr_weight)}.json") if args.decorr_weight > 0.0 else json_path
-    json_path = json_path.replace(".json", f"_lower_t.json") if args.temperature == 0.1 else json_path.replace(".json", f"_two_t.json") if args.temperature == 0.2 else json_path.replace(".json", f"_pf_t.json") if args.temperature == 0.15 else json_path.replace(".json", f"_lowest_t.json") if args.temperature == 0.01 else json_path
+    json_path = json_path.replace(".json", f"_lower_t.json") if args.temperature == 0.1 else json_path.replace(".json", f"_two_t.json") if args.temperature == 0.2 else json_path.replace(".json", f"_pf_t.json") if args.temperature == 0.15 else json_path.replace(".json", f"_h_t.json") if args.temperature == 0.125 else json_path
     json_path = json_path.replace(".json", "_specnorm.json") if args.spec_norm else json_path
     json_path = json_path.replace(".json", "_leastvol.json") if args.least_volumes else json_path
     json_path = json_path.replace(".json", f"_ts{timesteps}.json") if args.MOHalfCheetah else json_path
