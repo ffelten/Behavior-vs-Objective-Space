@@ -33,6 +33,8 @@ from morl_behavior_objective.methods.behaviorencoder_utils import (
     prepare_sa_trajectories,
     expand_interleaved_mask,
 )
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # ---------- Decoder Definition ----------
 class TrajectoryDecoder(nn.Module):
@@ -385,6 +387,7 @@ def main():
     arg_env.add_argument("-DSTS","--DeepSeaTreasureSmooth", help="DeepSeaTreasureSmooth environment",action="store_true")
     arg_env.add_argument("-DSTLR","--DeepSeaTreasureLeftRight", help="DeepSeaTreasureLeftRight environment",action="store_true")
     arg_env.add_argument("-MHC","--MOHalfCheetah", help="MO-HalfCheetah environment",action="store_true")
+    arg_env.add_argument("-MHW","--MOHighway", help="MO-Highway environment",action="store_true")
     # Add other envs if needed...
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
@@ -422,7 +425,7 @@ def main():
     random.seed(args.seed)
     device = th.device(args.device)
     print(f"Using device: {device}")
-    env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else "MHC" if args.MOHalfCheetah else "UNK"
+    env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else "MHC" if args.MOHalfCheetah else "MHW" if args.MOHighway else "UNK"
 
     # --- Data Loading and Preparation (from main_morl_BE.py) ---
     if args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth or args.DeepSeaTreasureLeftRight:
@@ -490,6 +493,32 @@ def main():
                 true_labels.append(i)
                 if ret_vec is not None:
                     obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
+    elif args.MOHighway:
+        name_env = "mo-highway-fast-v0" if not args.shorter else "mo-highway-fast-v0_100steps"
+        trajectories_directory_path = f"trajectories/morld/{name_env}_test/"
+        embeddings_folder_path = trajectories_directory_path + "embeddings/"
+        os.makedirs(embeddings_folder_path, exist_ok=True)
+        num_policies = 41# if not args.shorter else 80
+        env_id = "mo-highway-fast-v0" if not args.shorter else "mo-highway-fast-v0_100steps"
+
+        trajectories, true_labels, obj_feats_list = [], [], []
+        for i in range(num_policies):
+            file_path = os.path.join(trajectories_directory_path, f"policy_{i}.json")
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            ret_vec = data.get('return', None)
+            for states, actions in data['trajectories']:
+                obs = np.array(list(states) + [states[-1]], dtype=np.float32)
+                acts = np.array(actions, dtype=np.float32)
+                if acts.ndim ==1:
+                    acts = acts.reshape(-1,1)
+                # print("Truncated HalfCheetah trajectories to length 100 for faster training.")
+                traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
+                trajectories.append(traj)
+                true_labels.append(i)
+                if ret_vec is not None:
+                    obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
+    
     else:
         raise ValueError("Please select a valid environment")
 
@@ -515,7 +544,8 @@ def main():
 
     # --- Dataset and DataLoader ---
     all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, norm_trajectories, np.array(true_labels))
-
+    if args.MOHighway:
+        timesteps = max_len - 1
     returns_per_traj = []
     policy_map = {i:[] for i in range(num_policies)}
     for i, label in enumerate(true_labels):
@@ -534,7 +564,9 @@ def main():
 
     # --- Model, Losses, and Optimizer ---
     input_coord_dims = trajectories[0].obs.shape[1]
-    num_actions = trajectories[0].acts.shape[1]
+    print("Input coordinate dimensions:", input_coord_dims)
+    print("Input action dimensions:", trajectories[0].acts.shape)
+    num_actions = trajectories[0].acts.shape[1] if trajectories[0].acts.ndim > 1 else 1
 
     encoder = BehaviorEncoderCLSattnSATyped(
         input_channels=input_coord_dims, cnn_output_dim=args.emb_dim,steps=max_len, max_len=max_len,
@@ -650,9 +682,6 @@ def main():
     with open(json_path, "w") as fh:
         json.dump(output_data, fh, indent=2)
     print(f"Saved aggregated policy latents to {json_path}")
-
-
-
 
 if __name__ == "__main__":
     main()
