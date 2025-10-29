@@ -8,7 +8,7 @@ gpi_pareto/
 # C extensions
 *.so
 videos/
-
+*.html
 # Distribution / packaging
 .Python
 build/
