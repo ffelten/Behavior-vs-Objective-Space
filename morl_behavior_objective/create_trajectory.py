@@ -17,7 +17,7 @@ from morl_baselines.multi_policy.morld.morld import MORLD
 MODE = "morld"  # "gpi" or "morld"
 
 # Common
-ENV_ID = "mo-hopper-v5"   # works for both discrete/continuous, we detect action space at runtime
+ENV_ID = "mo-hopper-2obj-v5"   # works for both discrete/continuous, we detect action space at runtime
 GAMMA = 0.99
 SEED = 0
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -32,7 +32,7 @@ MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f'{ENV_ID}')
 # =======================================================
 params = {
     "algo": "morld",
-    "env_id": "mo-hopper-v5",  # "mo-halfcheetah-v5", #mo-highway-fast-v0
+    "env_id": "mo-hopper-2obj-v5",  # "mo-halfcheetah-v5", #mo-highway-fast-v0
     "num_timesteps": 1_000_000,
     "gamma": 0.99,
     "ref_point": [-1, -1, -40],  # [-100, -100],
