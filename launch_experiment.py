@@ -11,10 +11,10 @@ from morl_baselines.multi_policy.morld.morld import MORLD
 
 params = {
     "algo": "morld",
-    "env_id": "mo-hopper-v5",  # "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
+    "env_id": "mo-hopper-2obj-v5",  # "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
     "num_timesteps": 1_000_000,
     "gamma": 0.99,
-    "ref_point": [-100, -100, -100],  # [-1, -1, -40],  # [-100, -100],
+    "ref_point": [-100, -100],  # [-1, -1, -40],  # [-100, -100],
     "seed": 0,
     "wandb_entity": "florian-felten",
     "init_hyperparams": {
