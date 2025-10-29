@@ -2,15 +2,14 @@
 
 import os
 import json
-import pickle
+
 import numpy as np
 import mo_gymnasium as mo_gym
-import torch as th  # for checkpoint inspection/manual load
+
 
 from gymnasium.wrappers import FlattenObservation, TimeLimit
 
-from morl_baselines.common.weights import equally_spaced_weights
-from morl_baselines.common.pareto import filter_pareto_dominated
+
 from morl_baselines.multi_policy.morld.morld import MORLD
 
 
@@ -18,7 +17,7 @@ from morl_baselines.multi_policy.morld.morld import MORLD
 MODE = "morld"  # "gpi" or "morld"
 
 # Common
-ENV_ID = "mo-highway-fast-v0"   # works for both discrete/continuous, we detect action space at runtime
+ENV_ID = "mo-hopper-v5"   # works for both discrete/continuous, we detect action space at runtime
 GAMMA = 0.99
 SEED = 0
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -26,14 +25,14 @@ SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # MORLD settings
-MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "MORL_policies","mo-highway-fast-v0","seed0.tar")
+MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "MORL_policies", ENV_ID, "seed0.tar")
 LOAD_MORLD_REPLAY = False
 EPISODES_PER_POLICY = 50
-MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f'{ENV_ID}_100steps_test')
+MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f'{ENV_ID}')
 # =======================================================
 params = {
     "algo": "morld",
-    "env_id": "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
+    "env_id": "mo-hopper-v5",  # "mo-halfcheetah-v5", #mo-highway-fast-v0
     "num_timesteps": 1_000_000,
     "gamma": 0.99,
     "ref_point": [-1, -1, -40],  # [-100, -100],
@@ -42,7 +41,7 @@ params = {
     "init_hyperparams": {
         "scalarization_method": "ws",
         "evaluation_mode": "ser",
-        "policy_name": "MOSACDiscrete",  # "MOSAC",
+        "policy_name": "MOSAC",  # "MOSAC",
         "shared_buffer": False,
         "weight_adaptation_method": None,
         "exchange_every": 10_000,
@@ -138,7 +137,7 @@ def run_morld():
     env = mo_gym.make(ENV_ID)
     eval_env = mo_gym.make(ENV_ID)
 
-    if "mo-halfcheetah" in ENV_ID:
+    if "mo-halfcheetah" in ENV_ID or "mo-hopper" in ENV_ID:
         env = TimeLimit(env, max_episode_steps=100)
         eval_env = TimeLimit(eval_env, max_episode_steps=100)
     if "mo-highway-fast-v0" in ENV_ID:
@@ -168,6 +167,40 @@ def run_morld():
         with open(out_json, "w") as f:
             json.dump(make_json_safe(json_data), f, indent=2, allow_nan=False)
         print(f"  -> wrote JSON with return {return_vec} to {out_json}")
+
+def reder_policy(policy_id: int):
+    """
+    Renders a single MORLD policy by its ID.
+    """
+    env = mo_gym.make(ENV_ID, render_mode="human")
+    if "mo-halfcheetah" in ENV_ID or "mo-hopper" in ENV_ID:
+        env = TimeLimit(env, max_episode_steps=100)
+    if "mo-highway-fast-v0" in ENV_ID:
+        env = FlattenObservation(env)
+
+    agent = MORLD(env=env, gamma=params["gamma"], log=False, seed=params["seed"], **params["init_hyperparams"])
+    agent.load(MORLD_CHECKPOINT, load_replay_buffer=LOAD_MORLD_REPLAY)
+
+    if not hasattr(agent, "archive") or len(agent.archive.individuals) == 0:
+        raise RuntimeError("MORLD pareto archive is empty after load().")
+
+    pol = agent.archive.individuals[policy_id]
+    pweights = getattr(pol, "weights", None)
+    print(f"[MORLD] {ENV_ID}: rendering policy {policy_id} with weights {pweights}")
+
+    obs, _ = env.reset()
+    terminated = truncated = False
+
+    while not (terminated or truncated):
+        env.render()
+        try:
+            action = pol.wrapped.eval(obs, None)
+        except TypeError:
+            action = pol.wrapped.eval(obs)
+
+        obs, reward, terminated, truncated, info = env.step(action)
+
+    env.close()
 
 # -------------------- main --------------------
 
