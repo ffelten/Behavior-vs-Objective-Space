@@ -3,6 +3,55 @@ import numpy as np
 import numpy.typing as npt
 
 
+import os
+import json
+import mo_gymnasium as mo_gym
+
+from gymnasium.wrappers import FlattenObservation, TimeLimit
+
+from morl_baselines.multi_policy.morld.morld import MORLD
+
+import imageio
+
+params_highway = {
+    "algo": "morld",
+    "env_id": "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
+    "num_timesteps": 1_000_000,
+    "gamma": 0.99,
+    "ref_point": [-1, -1, -40],  # [-100, -100],
+    "seed": 0,
+    "wandb_entity": "florian-felten",
+    "init_hyperparams": {
+        "scalarization_method": "ws",
+        "evaluation_mode": "ser",
+        "policy_name": "MOSACDiscrete",  # "MOSAC",
+        "shared_buffer": False,
+        "weight_adaptation_method": None,
+        "exchange_every": 10_000,
+    },
+    "train_hyperparams": {},
+    "save_dic": "weights",
+}
+
+params_cheetah = {
+    "algo": "morld",
+    "env_id": "mo-halfcheetah-v5",
+    "num_timesteps": 1_000_000,
+    "gamma": 0.99,
+    "ref_point": [-1, -1, -40],  # [-100, -100],
+    "seed": 0,
+    "wandb_entity": "florian-felten",
+    "init_hyperparams": {
+        "scalarization_method": "ws",
+        "evaluation_mode": "ser",
+        "policy_name": "MOSAC",  # "MOSAC",
+        "shared_buffer": False,
+        "weight_adaptation_method": None,
+        "exchange_every": 10_000,
+    },
+    "train_hyperparams": {},
+    "save_dic": "weights",
+}
 
 
 def create_ground_truth_dst(trajectory_path: str) -> None:
@@ -186,9 +235,54 @@ def visualize_pareto_front(pareto_front: npt.NDArray, use_plotly: bool = True, s
     return fig
 #
 
+def render_policy(env_id: str, check_point: str, policy_id: int, n_episodes: int, save_dic = None) -> None:
+    """
+    Renders a single MORLD policy by its ID.
+    """
+    if save_dic is not None:
+        env=mo_gym.make(env_id, render_mode="rgb_array")
+        frames = []
+    else:
+        env = mo_gym.make(env_id, render_mode="human")
+    if "mo-halfcheetah" in env_id:
+        env = TimeLimit(env, max_episode_steps=100)
+        agent = MORLD(env=env, gamma=params_cheetah["gamma"], log=False, seed=params_cheetah["seed"], **params_cheetah["init_hyperparams"])
+    if "mo-highway-fast-v0" in env_id:
+        env = FlattenObservation(env)
+        agent = MORLD(env=env, gamma=params_highway["gamma"], log=False, seed=params_highway["seed"], **params_highway["init_hyperparams"])
+
+    agent.load(check_point, load_replay_buffer=False)
+
+    if not hasattr(agent, "archive") or len(agent.archive.individuals) == 0:
+        raise RuntimeError("MORLD pareto archive is empty after load().")
+
+    pol = agent.archive.individuals[policy_id]
+    pweights = getattr(pol, "weights", None)
+    print(f"[MORLD] {env_id}: rendering policy {policy_id} with weights {pweights}")
+    for episode in range(n_episodes):
+        obs, _ = env.reset()
+        terminated = truncated = False
+
+        while not (terminated or truncated):
+            if save_dic is not None:
+                frame = env.render()
+                frames.append(frame)
+            else:
+                env.render()
+            try:
+                action = pol.wrapped.eval(obs, None)
+            except TypeError:
+                action = pol.wrapped.eval(obs)
+
+            obs, reward, terminated, truncated, info = env.step(action)
+
+        env.close()
+        if save_dic is not None:
+            imageio.mimsave(os.path.join(save_dic, f"{env_id}_policy_{policy_id}_ep_{episode}.gif"), frames, fps=30)
 
 
 if __name__ == "__main__":
-    pf= get_pareto_front("trajectories/morld/mo-highway-fast-v0_100steps_test", pareto_size=41)
-    print(pf)
-    visualize_pareto_front(pf, save_html="pareto_front.html")
+    # pf= get_pareto_front("trajectories/morld/mo-highway-fast-v0_100steps_test", pareto_size=41)
+    # print(pf)
+    # visualize_pareto_front(pf, save_html="pareto_front.html")
+    render_policy(env_id="mo-halfcheetah-v4", check_point="MORL_policies/morld_cheetah_v5/seed0.tar", policy_id=50, save_dic="videos")

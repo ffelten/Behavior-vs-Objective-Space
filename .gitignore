@@ -7,6 +7,7 @@ trained_policies/
 gpi_pareto/
 # C extensions
 *.so
+videos/
 
 # Distribution / packaging
 .Python
