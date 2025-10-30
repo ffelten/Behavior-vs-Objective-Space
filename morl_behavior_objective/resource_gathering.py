@@ -16,9 +16,9 @@ RIGHT = 3
 
 OPTIMAL_POLICIES = {
     "diamond_home": [RIGHT] * 2 + [UP] * 3 + [DOWN] * 3 + [LEFT] * 2,
-    "both_resources_through_both_Es": [RIGHT] * 3 + [UP] * 4 + [LEFT] * 2 + [DOWN] * 4,
+    "both_resources_through_both_Es": [RIGHT] * 2 + [UP] * 4 + [LEFT] * 2 + [DOWN] * 4,
     "gold_through_E1_both_ways": [UP] * 4 + [DOWN] * 4,
-    "both_resources_dodging_E1_through_E2": [RIGHT] * 3 + [UP] * 4 + [LEFT] * 3 + [DOWN] * 4 + [RIGHT],
+    "both_resources_dodging_E1_through_E2": [RIGHT] * 2 + [UP] * 4 + [LEFT] * 3 + [DOWN] * 4 + [RIGHT],
     "gold_dodging_all_Es_in_12_steps": [LEFT] + [UP] * 4 + [RIGHT] + [LEFT] + [DOWN] * 4 + [RIGHT],
     "gold_through_E1_only_once": [UP] * 4 + [LEFT] + [DOWN] * 4 + [RIGHT],
     # "both_resources_dodging_both_Es_in_12_steps": [RIGHT] * 3
