@@ -460,6 +460,7 @@ def main():
     arg_env.add_argument("-MHW","--MOHighway", help="MO-Highway environment",action="store_true")
     arg_env.add_argument("-MHo2","--MOHopper2obj", help="MO-Hopper environment with 2 objectives",action="store_true")
     arg_env.add_argument("-MHo","--MOHopper", help="MO-Hopper environment",action="store_true")
+    arg_env.add_argument("-RG", "--ResourceGathering", help="ResourceGathering environment", action="store_true")
     # Add other envs if needed...
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
@@ -499,7 +500,8 @@ def main():
     device = th.device(args.device)
     print(f"Using device: {device}")
     env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else \
-               "MHC" if args.MOHalfCheetah else "MHW" if args.MOHighway else "MHo2" if args.MOHopper2obj else "MHo" if args.MOHopper else "UNK"
+               "MHC" if args.MOHalfCheetah else "MHW" if args.MOHighway else "MHo2" if args.MOHopper2obj else "MHo" if args.MOHopper \
+               else "RG" if args.ResourceGathering else "UNK"
 
     # --- Data Loading and Preparation (from main_morl_BE.py) ---
     if args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth or args.DeepSeaTreasureLeftRight:
@@ -536,7 +538,7 @@ def main():
                 true_labels.append(i)
                 if ret_vec is not None:
                     # Ensure obj_feats_list gets populated for every trajectory, even if return is the same for a policy
-                    obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
+                    obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))  
     elif args.MOHalfCheetah:
         name_env = "mo-halfcheetah-v4" if not args.shorter else "mo-halfcheetah-v4_100steps"
         trajectories_directory_path = f"trajectories/morld/{name_env}/"
@@ -617,7 +619,32 @@ def main():
                 true_labels.append(i)
                 if ret_vec is not None:
                     obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
- 
+    elif args.ResourceGathering:
+        name_env = "resource_gathering"
+        trajectories_directory_path = f"trajectories/{name_env}/"
+        embeddings_folder_path = trajectories_directory_path + "embeddings/"
+        os.makedirs(embeddings_folder_path, exist_ok=True)
+        num_policies = 6
+        env_id = "resource_gathering"
+        file_names = ["both_resources_dodging_E1_through_E2.json","both_resources_through_both_Es.json","diamond_home.json",
+                      "gold_dodging_all_Es_in_12_steps.json","gold_through_E1_both_ways.json","gold_through_E1_only_once.json"]
+
+        trajectories, true_labels, obj_feats_list = [], [], []
+        for i in range(num_policies):
+            file_path = os.path.join(trajectories_directory_path, file_names[i])
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            ret_vec = data.get('return', None)
+            for states, actions in data['trajectories']:
+                obs = np.array(list(states) + [states[-1]], dtype=np.float32)
+                acts = np.array(actions, dtype=np.float32)
+                if acts.ndim ==1:
+                    acts = acts.reshape(-1,1)
+                traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
+                trajectories.append(traj)
+                true_labels.append(i)
+                if ret_vec is not None:
+                    obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
     else:
         raise ValueError("Please select a valid environment")
 
@@ -643,7 +670,7 @@ def main():
 
     # --- Dataset and DataLoader ---
     all_states, all_actions, all_masks, all_labels, max_len = prepare_sa_trajectories(env_id, norm_trajectories, np.array(true_labels))
-    if args.MOHighway or args.MOHopper or args.MOHopper2obj:
+    if args.MOHighway or args.MOHopper or args.MOHopper2obj or args.ResourceGathering:
         timesteps = max_len - 1
         print("Trajectory timesteps:", timesteps)
     returns_per_traj = []
