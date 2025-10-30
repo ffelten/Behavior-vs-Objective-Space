@@ -667,7 +667,7 @@ def main():
     print("Input coordinate dimensions:", input_coord_dims)
     print("Input action dimensions:", trajectories[0].acts.shape)
     num_actions = trajectories[0].acts.shape[1] if trajectories[0].acts.ndim > 1 else 1
-
+    
     encoder = BehaviorEncoderCLSattnSATyped(
         input_channels=input_coord_dims, cnn_output_dim=args.emb_dim,steps=max_len, max_len=max_len,
         nhead=args.nheads, d_hid=args.d_hid, emb_dim=args.emb_dim,
