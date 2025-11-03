@@ -11,12 +11,15 @@ import seaborn as sns
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader, random_split
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from torch.utils.data import DataLoader
 from torch.nn.utils import parametrizations as parametrize
 import umap
 from tqdm import tqdm
 from sklearn.metrics import pairwise_distances
+from sklearn.manifold import trustworthiness
+from scipy.stats import wasserstein_distance
 
 from imitation.data.types import Trajectory
 from morl_behavior_objective.methods.behaviorencoder import (
@@ -218,7 +221,7 @@ def datasets_preparation_ret(
     Prepares datasets and DataLoaders for training, validation, and testing,
     including trajectory returns.
     """
-    from torch.utils.data import TensorDataset, DataLoader, random_split
+    
 
     # Ensure returns are provided and have the correct length
     if returns is None or len(returns) != len(all_states):
@@ -467,7 +470,7 @@ def main():
     arg_hyp.add_argument("--shorter",action="store_true", help="Use shorter trajectories for halfcheetah")
     arg_hyp.add_argument("--viz_policy_ids", type=int, nargs='+', default=None, help="List of policy IDs to label in the pre-aggregation visualization.")
     arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "mps" if th.backends.mps.is_available() else "cpu")
-    arg_hyp.add_argument("--epochs", type=int, default=200)
+    arg_hyp.add_argument("--epochs", type=int, default=501)
     arg_hyp.add_argument("--spec_norm", action="store_true", help="Use spectral normalization in the decoder")
     arg_hyp.add_argument("--least_volumes", action="store_true", help="Encourage least volume embeddings")
     arg_hyp.add_argument("--batch_size", type=int, default=32)
@@ -483,7 +486,7 @@ def main():
     arg_hyp.add_argument("--segment_weight", type=float, default=0.0)
     arg_hyp.add_argument("--vol_weight", type=float, default=0.0)
     arg_hyp.add_argument("--decorr_weight", type=float, default=0.0)
-    arg_hyp.add_argument("--temperature", type=float, default=0.2)
+    arg_hyp.add_argument("--temperature", type=float, default=0.05)
     arg_hyp.add_argument("--state_scaler", default="quantile_normal")
     arg_hyp.add_argument("--action_scaler", default="quantile_normal")
     arg_hyp.add_argument("--scaler_fit", default="seen", choices=["seen", "both"])
@@ -491,6 +494,7 @@ def main():
     arg_hyp.add_argument("--model_prefix", default="be")
     arg_hyp.add_argument("--train", action="store_true")
     arg_hyp.add_argument("--seed", type=int, default=0)
+    arg_hyp.add_argument("--save_data", action="store_true", help="Save the aggregated policy embeddings to a JSON file")
     args = parser.parse_args()
 
     # --- Seeding ---
@@ -765,7 +769,7 @@ def main():
     viz_path = viz_path.replace(".png", "_leastvol.png") if args.least_volumes else viz_path
     viz_path = viz_path.replace(".png", f"_ts{timesteps}.png") if args.MOHalfCheetah else viz_path
     policy_latents = aggregate_and_visualize_policy_embeddings(
-        embeddings, policies, args.emb_dim, save_path=viz_path
+        embeddings, policies, args.emb_dim, save_path=viz_path if args.save_data else None
     )
 
     # --- Save aggregated embeddings in the detailed JSON format ---
@@ -812,9 +816,112 @@ def main():
     json_path = json_path.replace(".json", "_leastvol.json") if args.least_volumes else json_path
     json_path = json_path.replace(".json", f"_ts{timesteps}.json") if args.MOHalfCheetah else json_path
     json_path = json_path.replace(".json", "_shorter.json") if args.shorter else json_path
-    with open(json_path, "w") as fh:
-        json.dump(output_data, fh, indent=2)
-    print(f"Saved aggregated policy latents to {json_path}")
+    if args.save_data:
+        with open(json_path, "w") as fh:
+            json.dump(output_data, fh, indent=2)
+        print(f"Saved aggregated policy latents to {json_path}")
+
+    # -----------------------------------------------------------------
+    # --- NEW: Wasserstein-based (Distributional) Analysis ---
+    # -----------------------------------------------------------------
+    print("\n" + "-"*30)
+    print("--- Starting Wasserstein-based (Distributional) Analysis ---")
+
+    # 1. Define K for neighborhood analysis
+    # We choose a small k, e.g., 5 neighbors
+    k_neighbors = 2
+    if num_policies <= k_neighbors:
+        print(f"Warning: k_neighbors={k_neighbors} is >= num_policies={num_policies}. Setting k=max(1, num_policies-2).")
+        k_neighbors = max(1, num_policies - 2)
+
+    # 2. Get unique policy IDs (already sorted by np.unique)
+    unique_pids = np.unique(policies)
+    N = len(unique_pids)
+    
+    # 3. Create the list of policy "point clouds" (distributions)
+    # policy_clouds is a list of [n_trajs_per_policy, emb_dim] arrays
+    print("Grouping trajectory embeddings by policy...")
+    policy_clouds = [embeddings[policies == pid] for pid in unique_pids]
+    emb_dim = policy_clouds[0].shape[1]
+
+    # 4. Create the objective space vectors
+    # (Ensuring they are in the same order as unique_pids)
+    policy_objectives = np.array(
+        [obj_feats_list[np.where(true_labels == pid)[0][0]] for pid in unique_pids]
+    )
+    # Ensure objectives are 2D
+    if policy_objectives.ndim == 1:
+        policy_objectives = policy_objectives.reshape(-1, 1)
+
+    # 5. Pre-compute the Objective Space Distance Matrix (D_obj)
+    print("Calculating N^2 Objective Distances (Euclidean)...")
+    D_obj_precomputed = pairwise_distances(policy_objectives, metric='euclidean')
+
+    # 6. Pre-compute the Behavioral Space Distance Matrix (D_emb_w)
+    # We use a sum of 1D Wasserstein distances as a proxy for the multi-D distance
+    # This avoids adding heavy new dependencies like POT.
+    print(f"Calculating N^2 Behavioral Distances (Wasserstein, {emb_dim}D)...")
+    D_emb_wasserstein = np.zeros((N, N))
+    
+    # Use tqdm for a progress bar on the outer loop
+    pbar = tqdm(range(N), desc="Wasserstein Matrix")
+    for i in pbar:
+        for j in range(i + 1, N):
+            dist = 0.0
+            cloud_i = policy_clouds[i]
+            cloud_j = policy_clouds[j]
+            
+            # Calculate 1D Wasserstein distance for each dimension and sum them
+            for d in range(emb_dim):
+                dist += wasserstein_distance(cloud_i[:, d], cloud_j[:, d])
+            
+            D_emb_wasserstein[i, j] = dist
+            D_emb_wasserstein[j, i] = dist # The matrix is symmetric
+
+    # 7. Calculate Distributional Trustworthiness and Continuity
+    print("Calculating Trustworthiness and Continuity...")
+    
+    # Trustworthiness: How many of the k-nearest neighbors in D_obj
+    # are preserved as neighbors in D_emb_w?
+    trust_w = trustworthiness(
+        D_obj_precomputed, D_emb_wasserstein, n_neighbors=k_neighbors, metric='precomputed'
+    )
+    
+    # Continuity: How many of the k-nearest neighbors in D_emb_w
+    # are preserved as neighbors in D_obj? (Just swap the matrices)
+    cont_w = trustworthiness(
+        D_emb_wasserstein, D_obj_precomputed, n_neighbors=k_neighbors, metric='precomputed'
+    )
+
+    print(f"  Distributional Trustworthiness (k={k_neighbors}): {trust_w:.4f}")
+    print(f"  Distributional Continuity (k={k_neighbors}):     {cont_w:.4f}")
+
+    # 8. Calculate and Plot the Distributional L-Plot
+    print("Calculating and plotting Distributional L-Plot...")
+    
+    # Get adjacent-pair distances from the precomputed matrices
+    adj_d_obj = np.array([D_obj_precomputed[i, i+1] for i in range(N - 1)])
+    adj_d_emb_w = np.array([D_emb_wasserstein[i, i+1] for i in range(N - 1)])
+
+    # Calculate the ratio, adding a small epsilon to prevent division by zero
+    L_plot_wasserstein = adj_d_emb_w / (adj_d_obj + 1e-9)
+
+    # Plotting
+    plt.figure(figsize=(12, 5))
+    plt.bar(range(N - 1), L_plot_wasserstein, color='C1', alpha=0.7)
+    plt.xlabel("Policy $i \\to i+1$")
+    plt.ylabel("Lipschitz Constant (Wasserstein)")
+    plt.title(f"Distributional Lipschitz Constants ({env_code})")
+    plt.tight_layout()
+    
+    # Save the plot
+    plot_save_path = os.path.join(image_dir, f"lipschitz_wasserstein_{args.emb_dim}d_e{args.epochs}.png")
+    plt.savefig(plot_save_path)
+    print(f"Saved Wasserstein L-Plot to {plot_save_path}")
+    plt.show()
+    
+    print("--- Distributional Analysis Complete ---")
+    # --- End of NEW Section ---
 
 if __name__ == "__main__":
     main()
