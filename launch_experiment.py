@@ -1,13 +1,12 @@
-import numpy as np
-
-import mo_gymnasium as mo_gym
-from gymnasium.wrappers import TimeLimit
-from mo_gymnasium.wrappers import MORecordEpisodeStatistics
 import os
+
 from gymnasium.wrappers import FlattenObservation
+from gymnasium.wrappers import TimeLimit
+import mo_gymnasium as mo_gym
+from mo_gymnasium.wrappers import MORecordEpisodeStatistics
 from morl_baselines.common.evaluation import seed_everything
 from morl_baselines.multi_policy.morld.morld import MORLD
-
+import numpy as np
 
 params = {
     "algo": "morld",

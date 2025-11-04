@@ -1,34 +1,29 @@
-'''Roll out GPI (discrete or continuous; auto-detected) or MORLD agents and save (state, action) pairs per episode.'''
+"""Roll out GPI (discrete or continuous; auto-detected) or MORLD agents and save (state, action) pairs per episode."""
 
-import os
 import json
+import os
 
-import numpy as np
+from gymnasium.wrappers import FlattenObservation
+from gymnasium.wrappers import TimeLimit
 import mo_gymnasium as mo_gym
-
-
-from gymnasium.wrappers import FlattenObservation, TimeLimit
-
-
 from morl_baselines.multi_policy.morld.morld import MORLD
-
+import numpy as np
 
 # ===================== CONFIG =====================
 MODE = "morld"  # "gpi" or "morld"
 
 # Common
-ENV_ID = "mo-hopper-2obj-v5"   # works for both discrete/continuous, we detect action space at runtime
+ENV_ID = "mo-hopper-2obj-v5"  # works for both discrete/continuous, we detect action space at runtime
 GAMMA = 0.99
 SEED = 0
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 
 
 # MORLD settings
 MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "MORL_policies", ENV_ID, "seed0.tar")
 LOAD_MORLD_REPLAY = False
 EPISODES_PER_POLICY = 50
-MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f'{ENV_ID}')
+MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f"{ENV_ID}")
 # =======================================================
 params = {
     "algo": "morld",
@@ -49,10 +44,11 @@ params = {
     "train_hyperparams": {},
     "save_dic": "weights",
 }
+
+
 # -------------------- JSON helpergit st --------------------
 def make_json_safe(obj):
-    """
-    Recursively convert objects to JSON-serializable types:
+    """Recursively convert objects to JSON-serializable types:
     - np.ndarray -> list
     - np.* scalars -> native Python scalars
     - tuples/sets -> lists
@@ -90,13 +86,11 @@ def make_json_safe(obj):
     return obj
 
 
-#--------------------- helpers --------------------
-
+# --------------------- helpers --------------------
 
 
 def _rollout_morld_policy(policy, env, episodes: int, seed: int | None = None):
-    """
-    Run episodes for a single MORLD policy (policy.wrapped).
+    """Run episodes for a single MORLD policy (policy.wrapped).
     Returns: list of trajectories; each trajectory is [states, actions],
              where states/actions are lists of per-step lists/floats (JSON-friendly).
     """
@@ -117,7 +111,6 @@ def _rollout_morld_policy(policy, env, episodes: int, seed: int | None = None):
             except TypeError:
                 action = policy.wrapped.eval(obs)
 
-
             episode_states.append(obs)
             episode_actions.append(action)
 
@@ -130,6 +123,7 @@ def _rollout_morld_policy(policy, env, episodes: int, seed: int | None = None):
 
 
 # -------------------- runners --------------------
+
 
 def run_morld():
     os.makedirs(MORLD_OUTPUT_DIR, exist_ok=True)
@@ -168,10 +162,9 @@ def run_morld():
             json.dump(make_json_safe(json_data), f, indent=2, allow_nan=False)
         print(f"  -> wrote JSON with return {return_vec} to {out_json}")
 
+
 def reder_policy(policy_id: int):
-    """
-    Renders a single MORLD policy by its ID.
-    """
+    """Renders a single MORLD policy by its ID."""
     env = mo_gym.make(ENV_ID, render_mode="human")
     if "mo-halfcheetah" in ENV_ID or "mo-hopper" in ENV_ID:
         env = TimeLimit(env, max_episode_steps=100)
@@ -201,6 +194,7 @@ def reder_policy(policy_id: int):
         obs, reward, terminated, truncated, info = env.step(action)
 
     env.close()
+
 
 # -------------------- main --------------------
 

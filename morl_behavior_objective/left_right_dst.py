@@ -1,8 +1,8 @@
 """This script plots the Pareto frontier for the Left-Right DST environment."""
 
 import json
+
 import matplotlib.pyplot as plt
-from mo_gymnasium.envs.deep_sea_treasure import CONCAVE_MAP
 import mo_gymnasium as mo_gym
 import numpy as np
 import numpy.typing as npt

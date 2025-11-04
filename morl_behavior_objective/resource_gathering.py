@@ -1,6 +1,5 @@
 import json
 import os
-from time import sleep
 
 import matplotlib.pyplot as plt
 import mo_gymnasium as mo_gym
@@ -21,16 +20,6 @@ OPTIMAL_POLICIES = {
     "both_resources_dodging_E1_through_E2": [RIGHT] * 2 + [UP] * 4 + [LEFT] * 3 + [DOWN] * 4 + [RIGHT],
     "gold_dodging_all_Es_in_12_steps": [LEFT] + [UP] * 4 + [RIGHT] + [LEFT] + [DOWN] * 4 + [RIGHT],
     "gold_through_E1_only_once": [UP] * 4 + [LEFT] + [DOWN] * 4 + [RIGHT],
-    # "both_resources_dodging_both_Es_in_12_steps": [RIGHT] * 3
-    # + [UP] * 3
-    # + [LEFT]
-    # + [DOWN]
-    # + [LEFT] * 2
-    # + [UP] * 2
-    # + [RIGHT]
-    # + [LEFT]
-    # + [DOWN] * 4
-    # + [RIGHT],
 }
 
 
@@ -84,16 +73,16 @@ for policy_name, policy in OPTIMAL_POLICIES.items():
         )
 
 
-# # plot the pareto frontier
-# pareto_frontier = np.array([pareto_frontier[policy_name] for policy_name in OPTIMAL_POLICIES])
-# plt.figure()
-# ax = plt.axes(projection="3d")
-# # add policy names as text labels
-# for i, policy_name in enumerate(OPTIMAL_POLICIES):
-#     ax.text(pareto_frontier[i, 0], pareto_frontier[i, 1], pareto_frontier[i, 2], policy_name)
-# ax.scatter(pareto_frontier[:, 0], pareto_frontier[:, 1], pareto_frontier[:, 2])
-# ax.set_xlabel("Objective 1")
-# ax.set_ylabel("Objective 2")
-# ax.set_zlabel("Objective 3")
-# ax.set_title("Pareto Frontier")
-# plt.show()
+# plot the pareto frontier
+pareto_frontier = np.array([pareto_frontier[policy_name] for policy_name in OPTIMAL_POLICIES])
+plt.figure()
+ax = plt.axes(projection="3d")
+# add policy names as text labels
+for i, policy_name in enumerate(OPTIMAL_POLICIES):
+    ax.text(pareto_frontier[i, 0], pareto_frontier[i, 1], pareto_frontier[i, 2], policy_name)
+ax.scatter(pareto_frontier[:, 0], pareto_frontier[:, 1], pareto_frontier[:, 2])
+ax.set_xlabel("Objective 1")
+ax.set_ylabel("Objective 2")
+ax.set_zlabel("Objective 3")
+ax.set_title("Pareto Frontier")
+plt.show()
