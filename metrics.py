@@ -1,4 +1,5 @@
 """Diagnostic metrics for comparing behavior and objective space representations.
+
 Each function takes representations in two different spaces and computes relevant metrics.
 """
 
