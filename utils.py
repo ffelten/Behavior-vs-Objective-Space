@@ -9,38 +9,18 @@ from morl_baselines.multi_policy.morld.morld import MORLD
 import numpy as np
 import numpy.typing as npt
 
-params_highway = {
+params = {
     "algo": "morld",
-    "env_id": "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
+    "env_id": "mo-hopper-2obj-v5",  # "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
     "num_timesteps": 1_000_000,
     "gamma": 0.99,
-    "ref_point": [-1, -1, -40],  # [-100, -100],
+    "ref_point": [-100, -100],  # [-1, -1, -40],  # [-100, -100],
     "seed": 0,
     "wandb_entity": "florian-felten",
     "init_hyperparams": {
         "scalarization_method": "ws",
         "evaluation_mode": "ser",
-        "policy_name": "MOSACDiscrete",  # "MOSAC",
-        "shared_buffer": False,
-        "weight_adaptation_method": None,
-        "exchange_every": 10_000,
-    },
-    "train_hyperparams": {},
-    "save_dic": "weights",
-}
-
-params_cheetah = {
-    "algo": "morld",
-    "env_id": "mo-halfcheetah-v5",
-    "num_timesteps": 1_000_000,
-    "gamma": 0.99,
-    "ref_point": [-1, -1, -40],  # [-100, -100],
-    "seed": 0,
-    "wandb_entity": "florian-felten",
-    "init_hyperparams": {
-        "scalarization_method": "ws",
-        "evaluation_mode": "ser",
-        "policy_name": "MOSAC",  # "MOSAC",
+        "policy_name": "MOSAC",  # "MOSACDiscrete",  # "MOSAC",
         "shared_buffer": False,
         "weight_adaptation_method": None,
         "exchange_every": 10_000,
@@ -253,31 +233,23 @@ def visualize_pareto_front(
     return fig
 
 
-def render_policy(env_id: str, check_point: str, policy_id: int, n_episodes: int, save_dic=None) -> None:
+def render_policy(env_id: str, check_point: str, policy_id: int, n_episodes: int, save_dic=None, fps=30) -> None:
     """Renders a single MORLD policy by its ID."""
     if save_dic is not None:
         env = mo_gym.make(env_id, render_mode="rgb_array")
-        frames = []
+        os.makedirs(save_dic, exist_ok=True)
     else:
+        #check if directory exists otherwise create it
         env = mo_gym.make(env_id, render_mode="human")
-    if "mo-halfcheetah" in env_id:
+    if "mo-halfcheetah" in env_id.lower() or "mo-hopper" in env_id.lower():
         env = TimeLimit(env, max_episode_steps=100)
-        agent = MORLD(
-            env=env,
-            gamma=params_cheetah["gamma"],
-            log=False,
-            seed=params_cheetah["seed"],
-            **params_cheetah["init_hyperparams"],
-        )
-    if "mo-highway-fast-v0" in env_id:
+    elif "highway" in env_id.lower():
         env = FlattenObservation(env)
-        agent = MORLD(
-            env=env,
-            gamma=params_highway["gamma"],
-            log=False,
-            seed=params_highway["seed"],
-            **params_highway["init_hyperparams"],
+    else:
+        raise ValueError(
+            f"Environment {env_id} not supported, only 'mo-halfcheetah', 'mo-hopper' and 'highway' are supported"
         )
+    agent = MORLD(env=env, log=False, seed=params["seed"], **params["init_hyperparams"])
 
     agent.load(check_point, load_replay_buffer=False)
 
@@ -288,6 +260,7 @@ def render_policy(env_id: str, check_point: str, policy_id: int, n_episodes: int
     pweights = getattr(pol, "weights", None)
     print(f"[MORLD] {env_id}: rendering policy {policy_id} with weights {pweights}")
     for episode in range(n_episodes):
+        frames = []
         obs, _ = env.reset()
         terminated = truncated = False
 
@@ -304,9 +277,9 @@ def render_policy(env_id: str, check_point: str, policy_id: int, n_episodes: int
 
             obs, reward, terminated, truncated, info = env.step(action)
 
-        env.close()
         if save_dic is not None:
-            imageio.mimsave(os.path.join(save_dic, f"{env_id}_policy_{policy_id}_ep_{episode}.gif"), frames, fps=30)
+            imageio.mimsave(os.path.join(save_dic, f"{env_id}_policy_{policy_id}_ep_{episode}.gif"), frames, fps=fps)
+    env.close()
 
 
 if __name__ == "__main__":
