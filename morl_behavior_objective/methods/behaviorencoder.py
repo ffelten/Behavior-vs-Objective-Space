@@ -697,6 +697,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         gaussian_sigma_state: float = 10.0,
         gaussian_m_action: int = 512,
         gaussian_sigma_action: float = 10.0,
+        normalize_output_embeddings: bool = False,
     ):
         super().__init__()
         self.d_model = emb_dim
@@ -776,6 +777,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         print(
             f"Input treated with {coord_state_kind} fourier feature encoder for states and {coord_action_kind} fourier feature encoder for actions."
         )
+        self.normalize_output_embeddings = normalize_output_embeddings
 
     @staticmethod
     def make_coord_mlp_encoder(
@@ -877,8 +879,11 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         transformer_out, attn_list = self.transformer_encoder(emb, src_mask=None, src_key_padding_mask=final_padding_mask)
 
         # 8. Normalize outputs and get trajectory summary
-        norm = transformer_out.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
-        normalized = transformer_out / norm
+        if self.normalize_output_embeddings:
+            norm = transformer_out.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
+            normalized = transformer_out / norm
+        else:
+            normalized = transformer_out
 
         # pooled, pool_weights = self.pooling(transformer_out, final_padding_mask)
         cls_emb = normalized[:, 0, :]
