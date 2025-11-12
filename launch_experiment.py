@@ -1,3 +1,4 @@
+import argparse
 import os
 
 from gymnasium.wrappers import FlattenObservation
@@ -29,6 +30,12 @@ params = {
 }
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Launch MORL experiment")
+    parser.add_argument("--seed", type=int, required=True, help="Random seed (default: 0)")
+    args = parser.parse_args()
+    # Update seed from command line argument
+    params["seed"] = args.seed
+
     print("Launching experiment with parameters:")
     for k, v in params.items():
         print(f"  {k}: {v}")

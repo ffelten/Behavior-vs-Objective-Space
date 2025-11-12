@@ -11,7 +11,7 @@ requires-python = ">= 3.10"
 keywords = ["Reinforcement Learning", "Multi-Objective Reinforcement Learning"]
 dependencies = [
     "numpy",
-    "mo-gymnasium[mujoco] >= 1.2.0",
+    "mo-gymnasium[mujoco,highway] >= 1.2.0",
     "morl-baselines >= 1.2.0",
     "scipy >= 1.16.1",
     "matplotlib >= 3.9.3",
