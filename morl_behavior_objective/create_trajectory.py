@@ -13,37 +13,16 @@ import numpy as np
 MODE = "morld"  # "gpi" or "morld"
 
 # Common
-ENV_ID = "mo-hopper-2obj-v5"  # works for both discrete/continuous, we detect action space at runtime
+ENV_ID = "mo-highway-fast-v0"  # works for both discrete/continuous, we detect action space at runtime
 GAMMA = 0.99
-SEED = 0
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # MORLD settings
-MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "MORL_policies", ENV_ID, "seed0.tar")
 LOAD_MORLD_REPLAY = False
 EPISODES_PER_POLICY = 50
-MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f"{ENV_ID}")
 # =======================================================
-params = {
-    "algo": "morld",
-    "env_id": "mo-hopper-2obj-v5",  # "mo-halfcheetah-v5", #mo-highway-fast-v0
-    "num_timesteps": 1_000_000,
-    "gamma": 0.99,
-    "ref_point": [-1, -1, -40],  # [-100, -100],
-    "seed": 0,
-    "wandb_entity": "florian-felten",
-    "init_hyperparams": {
-        "scalarization_method": "ws",
-        "evaluation_mode": "ser",
-        "policy_name": "MOSAC",  # "MOSAC",
-        "shared_buffer": False,
-        "weight_adaptation_method": None,
-        "exchange_every": 10_000,
-    },
-    "train_hyperparams": {},
-    "save_dic": "weights",
-}
+
 
 
 # -------------------- JSON helpergit st --------------------
@@ -148,7 +127,7 @@ def run_morld():
         pweights = getattr(pol, "weights", None)
         print(f"[MORLD] {ENV_ID}: running {EPISODES_PER_POLICY} episodes for policy {pid} with weights {pweights}")
 
-        all_trajectories = _rollout_morld_policy(pol, eval_env, EPISODES_PER_POLICY, seed=SEED)
+        all_trajectories = _rollout_morld_policy(pol, eval_env, EPISODES_PER_POLICY, seed=seed)
 
         return_vec = agent.archive.evaluations[pid]
 
@@ -200,6 +179,28 @@ def reder_policy(policy_id: int):
 
 if __name__ == "__main__":
     if MODE == "morld":
-        run_morld()
+        for seed in range(5):
+            MORLD_CHECKPOINT = os.path.join(SCRIPT_DIR, "MORL_policies", f"{ENV_ID}", f"seed{seed}.tar")
+            MORLD_OUTPUT_DIR = os.path.join("trajectories", "morld", f"{ENV_ID}", f"seed{seed}")
+            params = {
+                "algo": "morld",
+                "env_id": ENV_ID,  # "mo-halfcheetah-v5", #mo-highway-fast-v0
+                "num_timesteps": 1_000_000,
+                "gamma": 0.99,
+                "ref_point": [-1, -1, -40],  # [-100, -100],
+                "seed": seed,
+                "wandb_entity": "florian-felten",
+                "init_hyperparams": {
+                    "scalarization_method": "ws",
+                    "evaluation_mode": "ser",
+                    "policy_name": "MOSACDiscrete",  # "MOSAC", "MOSACDiscrete"
+                    "shared_buffer": False,
+                    "weight_adaptation_method": None,
+                    "exchange_every": 10_000,
+                },
+                "train_hyperparams": {},
+                "save_dic": "weights",
+            }
+            run_morld()
     else:
         raise ValueError("MODE must be 'morld'.")
