@@ -1,32 +1,13 @@
 import math
 
-import torch as th
-from torch import nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset
+import torch as th # type: ignore[import]
+from torch import nn # type: ignore[import]
+import torch.nn.functional as F # type: ignore[import]
+from typing import Tuple
 
 # -------------------------------
 # Transformer Approach
 # -------------------------------
-
-
-class TrajectoryDataset(Dataset):
-    """PyTorch Dataset for state-action trajectory data, including ground-truth labels."""
-
-    def __init__(self, states: th.Tensor, actions: th.Tensor, masks: th.Tensor, labels: th.Tensor):
-        self.states = states
-        self.actions = actions
-        self.masks = masks
-        self.labels = labels
-        assert len(states) == len(actions) == len(masks) == len(labels), "All tensors must have the same length."
-
-    def __len__(self):
-        return len(self.states)
-
-    def __getitem__(self, idx):
-        """Returns a tuple of (states, actions, mask, label,index) for a single trajectory."""
-        return self.states[idx], self.actions[idx], self.masks[idx], self.labels[idx], idx
-
 
 class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation="relu", batch_first=True):
@@ -66,7 +47,6 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         src = self.norm2(src)
         return src, attn_weights
 
-
 class CustomTransformerEncoder(nn.Module):
     def __init__(self, encoder_layer_params, num_layers):
         super().__init__()
@@ -88,7 +68,6 @@ class CustomTransformerEncoder(nn.Module):
         output = self.norm(output)
         return output, attn_weights_list
 
-
 class FourierFeatureEmbed(nn.Module):
     """Maps coords to high-dim Fourier features."""
 
@@ -105,7 +84,6 @@ class FourierFeatureEmbed(nn.Module):
         x_cos = th.cos(x_proj)
         # concat along last dim → [B*L, 2 * num_bands]
         return th.cat([x_sin, x_cos], dim=-1).view(x.shape[0], -1)
-
 
 class ScaledFourierFeatureEmbed(nn.Module):
     """Deterministic per-dimension Fourier features with learnable per-dim scale.
@@ -125,7 +103,6 @@ class ScaledFourierFeatureEmbed(nn.Module):
         x_scaled = x * self.log_scale.exp()  # [N, in_dims]
         x_proj = 2 * math.pi * x_scaled.unsqueeze(-1) * self.bands  # [N, in_dims, num_bands]
         return th.cat([th.sin(x_proj), th.cos(x_proj)], dim=-1).reshape(x.shape[0], -1)
-
 
 class GaussianFourierFeatureEmbed(nn.Module):
     """Random Fourier Features (RFF) with a shared projection across dims:
@@ -159,7 +136,6 @@ class GaussianFourierFeatureEmbed(nn.Module):
         if self.normalize_out:
             z = z / math.sqrt(self.m)  # optional variance stabilization
         return z  # [N, 2m]
-
 
 class CoordMLPEncoder(nn.Module):
     """Embeds 2-D coords into d_model via Fourier features + MLP + LayerNorm,
@@ -196,7 +172,6 @@ class CoordMLPEncoder(nn.Module):
         x = self.net(x)  # [B*L, d_model]
         return x
 
-
 class CoordMLPEncoderScaled(nn.Module):
     """Deterministic bands + learnable per-dimension scale (higher sensitivity without huge max_freq)."""
 
@@ -231,7 +206,6 @@ class CoordMLPEncoderScaled(nn.Module):
         x = self.ff(coords)
         return self.net(x)
 
-
 class CoordMLPEncoderGaussian(nn.Module):
     """Random Fourier Features (RFF) using a shared Gaussian projection; mixes dimensions.
     Output feature size is 2*m (independent of in_dims).
@@ -265,7 +239,6 @@ class CoordMLPEncoderGaussian(nn.Module):
             raise ValueError(f"Expected coords with {self.in_dims} dimensions, got {coords.shape[-1]}")
         x = self.rff(coords)
         return self.net(x)
-
 
 class TemporalConvEncoder(nn.Module):
     """Takes per-step embeddings [B, L, D] and learns temporal patterns
@@ -302,7 +275,6 @@ class TemporalConvEncoder(nn.Module):
         x = self.net(x)  # [B, D, L]
         x = x.transpose(1, 2)  # [B, L, D]
         return x
-
 
 class GridEncoderDropout3D(nn.Module):
     """3D CNN encoder over a small temporal window.
@@ -371,7 +343,6 @@ class GridEncoderDropout3D(nn.Module):
         x_fc_out = self.fc(x_flat)  # fc input is hidden_channels*4
         return x_fc_out.view(B, T_dim, -1)  # [B, T, out_dim]
 
-
 class PositionalEncoding(nn.Module):
     """Implement the PE function."""
 
@@ -392,280 +363,7 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, : x.size(1)].requires_grad_(False)
         return self.dropout(x)
 
-
-## MODEL (also with autoencoder but not used not, kept in case)
-
-
-class BehavioralAutoencoderSA_AR(nn.Module):
-    """An autoregressive autoencoder for state-action trajectories.
-    It wraps the encoder and the autoregressive SA decoder, handling the
-    teacher-forcing logic for training.
-    """
-
-    def __init__(self, encoder: nn.Module, decoder: nn.Module):
-        super().__init__()
-        self.encoder = encoder
-        self.decoder = decoder
-        self.with_cls = True
-        # The SOS token is the first input to the decoder
-        self.sos_token = nn.Parameter(th.randn(1, 1, self.encoder.d_model))
-        self.model_type = "BD_SA_DT"
-
-    @th.no_grad()
-    def generate_with_cls(
-        self,
-        cls: th.Tensor,  # shape [B, D], a chosen cluster embedding
-        max_len: int,
-    ) -> th.Tensor:
-        """Autoregressively generates interleaved [s0,a0,s1,a1,…] of length max_len,
-        conditioned on a fixed CLS embedding.
-        Returns a tensor of shape [B, max_len, state_dim] and [B, max_len,] for actions.
-        """
-        B, D = cls.shape
-        device = cls.device
-
-        # 1) Build the decoder memory: repeat cls, then zeros for history placeholder
-        #    If you want the decoder to see *only* the CLS, skip history_mem entirely
-        history_len = max_len - 1  # or 0 if you want purely from CLS
-        cls_token = cls.unsqueeze(1)  # [B,1,D]
-        hist_tokens = th.zeros(B, history_len, D, device=device)  # dummy placeholders
-        decoder_memory = th.cat([cls_token, hist_tokens], dim=1)  # [B, max_len, D]
-
-        # 2) Start with SOS
-        generated = self.sos_token.expand(B, 1, D)  # [B,1,D]
-
-        for t in range(max_len):
-            tgt_mask = self.decoder.generate_square_subsequent_mask(generated.size(1), device=device)
-            # run one decoder step
-            out_states, out_actions = self.decoder(
-                tgt_emb=generated,
-                memory=decoder_memory[:, : generated.size(1), :],
-                tgt_mask=tgt_mask,
-                memory_key_padding_mask=None,
-                tgt_key_padding_mask=None,
-            )
-            # take last predicted state & action
-            next_state = out_states[:, -1:, :]  # [B,1,state_dim]
-            next_action_logits = out_actions[:, -1:, :]  # [B,1,num_actions]
-            if self.decoder.predict_discrete:
-                next_action = next_action_logits.argmax(-1, keepdim=True)  # [B,1]
-            else:
-                # continuous action: just take the real-valued output
-                next_action = next_action_logits
-
-            # embed back into D-dimensional space
-            #  (use the same pipeline as _prepare_target_embeddings)
-            flat_s = next_state.reshape(B, -1)  # [B, state_dim]
-            state_emb = self.encoder.coord_encoder(flat_s).view(B, 1, -1)
-            state_emb = self.encoder.temporal_encoder(state_emb) if hasattr(self.encoder, "temporal_encoder") else state_emb
-
-            # action path
-            if self.decoder.predict_discrete:
-                # discrete
-                action_emb = self.encoder.action_encoder_discr(next_action.squeeze(-1)).unsqueeze(1)
-            else:
-                # continuous
-                flat_a = next_action.view(B, -1)
-                if flat_a.shape[1] == 0:
-                    raise ValueError(f"Trying to encode an empty action tensor: shape {flat_a.shape}")
-                action_emb = self.encoder.action_encoder_cont(flat_a).view(B, 1, -1)
-                action_emb = self.encoder.action_temporal_encoder_cont(action_emb)
-
-            # add timestep + modality
-            t_emb = self.encoder.embed_timestep(th.full((B, 1), t, dtype=th.long, device=device))
-            state_emb = state_emb + t_emb + self.encoder.state_type_embedding
-            action_emb = action_emb + t_emb + self.encoder.action_type_embedding
-
-            # interleave and append
-            next_emb = th.stack([state_emb, action_emb], dim=2).view(B, -1, D)
-            generated = th.cat([generated, next_emb], dim=1)
-
-        # final split back to states & actions
-        gen = generated[:, 1:].view(B, -1, 2, D).permute(0, 2, 1, 3)
-        gen_states = self.decoder.state_pred_head(gen[:, 0])  # [B,max_len,state_dim]
-        if self.decoder.predict_discrete:
-            gen_actions = self.decoder.action_pred_head_discrete(gen[:, 1])  # [B,max_len,num_actions]
-        else:
-            gen_actions = self.decoder.action_pred_head_cont(gen[:, 1])  # [B,max_len,num_actions]
-        return gen_states, gen_actions
-
-    def _prepare_target_embeddings(self, states: th.Tensor, actions: th.Tensor):
-        """Recreates the interleaved token embeddings from the raw states and actions.
-        This logic must mirror the tokenization strategy in the encoder.
-        NOTE: This is tightly coupled to the `BehaviorEncoderCLSattnSATyped` implementation.
-        """
-        B, T, *_ = states.shape
-
-        # Embed states (handling grid vs. coord)
-        if states.dim() == 5:
-            state_emb = self.encoder.input_proj(
-                self.encoder.cnn_encoder(states.view(B * T, *states.shape[2:])).view(B, T, -1)
-            )
-        else:
-            state_emb = self.encoder.coord_encoder(states.view(B * T, -1)).view(B, T, -1)
-            state_emb = self.encoder.temporal_encoder(state_emb)
-
-        # Embed actions
-        if self.decoder.predict_discrete:
-            action_emb = self.encoder.action_encoder_discr(actions)
-        else:
-            flat_a = actions.view(B * T, -1)
-            action_emb = self.encoder.action_encoder_cont(flat_a).view(B, T, -1)
-            action_emb = self.encoder.action_temporal_encoder_cont(action_emb)
-
-        # Add timestep and modality embeddings, just like in the encoder
-        timesteps = th.arange(T, device=states.device).unsqueeze(0).expand(B, T)
-        timestep_embeddings = self.encoder.embed_timestep(timesteps)
-        state_emb += timestep_embeddings + self.encoder.state_type_embedding
-        action_emb += timestep_embeddings + self.encoder.action_type_embedding
-
-        # Interleave to create the target sequence: [s0, a0, s1, a1, ...]
-        interleaved_emb = th.stack([state_emb, action_emb], dim=2).view(B, 2 * T, self.encoder.d_model)
-        return interleaved_emb
-
-    def forward(
-        self,
-        states: th.Tensor,  # [B, T, state_dim]
-        actions: th.Tensor,  # [B, T]  (discrete)
-        src_key_padding_mask: th.Tensor | None = None,
-    ):
-        B, T, _ = states.shape
-        D = self.encoder.d_model
-
-        # === 1) ENCODER PASS ===
-        # This will apply: coord_encoder → temporal_encoder → interleaving → CLS + transformer
-        full_mem, _, _, _, cls_emb, _ = self.encoder(states, actions, src_key_padding_mask=src_key_padding_mask)
-        # full_mem is [B, 1 + 2T, D] with slots [CLS, s0,a0,s1,a1,…]
-
-        # === 2) PREPARE DECODER MEMORY ===
-        # We want the decoder to *cross*-attend to [CLS, s0,a0,…] exactly as-is:
-        decoder_memory = full_mem
-        # Masking: never mask CLS (pos 0); mask padded history
-        if src_key_padding_mask is not None:
-            cls_mask = th.zeros(B, 1, dtype=th.bool, device=states.device)
-            hist_mask = src_key_padding_mask.unsqueeze(-1).expand(-1, -1, 2).reshape(B, 2 * T)
-            memory_key_padding_mask = th.cat([cls_mask, hist_mask], dim=1)  # [B,1+2T]
-        else:
-            memory_key_padding_mask = None
-
-        # === 3) PREPARE DECODER INPUTS (TEACHER FORCING) ===
-        # Recreate the *interleaved* target embeddings (s0,a0,s1,a1,…)
-        # (this *does not* include CLS)
-        tgt_emb = self._prepare_target_embeddings(states, actions)  # [B, 2T, D]
-
-        # Prepend SOS instead of CLS
-        sos = self.sos_token.expand(B, -1, -1)  # [B,1,D]
-        decoder_input_emb = th.cat([sos, tgt_emb], dim=1)  # [B,1+2T,D]
-
-        # Build causal mask and padding mask for decoder self-attn
-        seq_len = 1 + 2 * T
-        tgt_mask = self.decoder.generate_square_subsequent_mask(seq_len, device=states.device)
-        tgt_key_padding_mask = memory_key_padding_mask  # identical: first pos unmasked, then pad where needed
-
-        # === 4) DECODER PASS ===
-        states_rec, actions_rec_logits = self.decoder(
-            tgt_emb=decoder_input_emb,  # [B,1+2T,D]
-            memory=decoder_memory,  # [B,1+2T,D]
-            tgt_mask=tgt_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask,
-            memory_key_padding_mask=memory_key_padding_mask,
-        )
-
-        return cls_emb, decoder_memory, states_rec, actions_rec_logits
-
-
-class BehaviorTransformerDecoderSA_AR(nn.Module):
-    """An autoregressive decoder for state-action (SA) trajectories.
-    It takes an interleaved sequence of state-action embeddings and reconstructs them step-by-step.
-    """
-
-    def __init__(
-        self,
-        emb_dim: int,
-        nhead: int,
-        d_hid: int,
-        nlayers: int,
-        state_dim: int,
-        num_actions: int,
-        dropout: float = 0.1,
-        max_len: int = 100,
-        discrete_actions: bool = False,
-    ):
-        super().__init__()
-        self.d_model = emb_dim
-
-        # Positional encoding for the interleaved target sequence (s0, a0, s1, a1, ...)
-        self.pos_encoder = PositionalEncoding(emb_dim, dropout, max_len=max_len * 2 + 1)
-
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=self.d_model, nhead=nhead, dim_feedforward=d_hid, dropout=dropout, batch_first=True
-        )
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=nlayers)
-        self.predict_discrete = discrete_actions
-        # Separate heads for state (continuous) and action (discrete) prediction
-        self.state_pred_head = nn.Linear(self.d_model, state_dim)
-        self.action_pred_head_discrete = nn.Linear(emb_dim, num_actions)
-        self.action_pred_head_cont = nn.Sequential(
-            nn.Linear(emb_dim, num_actions),
-            nn.Tanh(),
-        )
-        self.model_type = "BD_SA_DT"
-        self.init_weights()
-
-    def init_weights(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-
-    def forward(
-        self,
-        tgt_emb: th.Tensor,
-        memory: th.Tensor,
-        tgt_mask: th.Tensor | None = None,
-        tgt_key_padding_mask: th.Tensor | None = None,
-        memory_key_padding_mask: th.Tensor | None = None,
-    ):
-        """Args:
-        tgt_emb (Tensor): The embedded target sequence. Shape: [B, T_tgt, D]
-        memory (Tensor): The output from the encoder. Shape: [B, T_src, D]
-        """
-        # Apply positional encoding
-        tgt_with_pe = self.pos_encoder(tgt_emb)
-
-        # Pass through transformer decoder
-        output = self.transformer_decoder(
-            tgt=tgt_with_pe,
-            memory=memory,
-            tgt_mask=tgt_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask,
-            memory_key_padding_mask=memory_key_padding_mask,
-        )
-        if self.training:
-            # During training, we remove the last token to match the target sequence length
-            # (because we predict one token at a time)
-            # This is not needed during inference, where we generate one token at a time.
-            output = output[:, :-1, :]
-            # The output is an interleaved sequence of embeddings.
-            # Separate them to apply the correct prediction head.
-            state_out_emb = output[:, 0::2, :]  # State embeddings are at even indices
-            action_out_emb = output[:, 1::2, :]  # Action embeddings are at odd indices
-        else:
-            state_out_emb = output
-            action_out_emb = output
-
-        # Project to get reconstructions
-        states_rec = self.state_pred_head(state_out_emb)
-        if self.predict_discrete:
-            actions_rec_logits = self.action_pred_head_discrete(action_out_emb)
-        else:
-            actions_rec_logits = self.action_pred_head_cont(action_out_emb)
-
-        return states_rec, actions_rec_logits
-
-    def generate_square_subsequent_mask(self, sz: int, device: th.device) -> th.Tensor:
-        """Generates a causal mask for autoregressive decoding."""
-        return nn.Transformer.generate_square_subsequent_mask(sz, device=device)
-
+## Behavioral Encoder with SA tokenization and type embeddings
 
 class BehaviorEncoderCLSattnSATyped(nn.Module):
     """A Behavior Encoder using Decision Transformer-style tokenization and positional embeddings.
@@ -697,7 +395,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         gaussian_sigma_state: float = 10.0,
         gaussian_m_action: int = 512,
         gaussian_sigma_action: float = 10.0,
-        normalize_output_embeddings: bool = False,
+        normalize_output_embeddings: bool = True,
     ):
         super().__init__()
         self.d_model = emb_dim
@@ -894,10 +592,87 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
 
         return normalized, attn_list_agg, _, _, cls_emb, cls_attn
 
+# ---------- Decoder Definition ----------
+class TrajectoryDecoder(nn.Module):
+    def __init__(self, emb_dim, state_dim, action_dim, max_len): # Removed spec_norm
+        super().__init__()
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.max_len = max_len
+        self.out_features = max_len * (state_dim + action_dim)
+
+        self.net = nn.Sequential(
+            nn.Linear(emb_dim, 1024), # Removed spec_norm logic
+            nn.GELU(),
+            nn.Linear(1024, 1024), # Removed spec_norm logic
+            nn.GELU(),
+            nn.Linear(1024, self.out_features), # Removed spec_norm logic
+        )
+
+    def forward(self, cls_embedding):
+        # cls_embedding shape: [B, emb_dim]
+        flat_recon = self.net(cls_embedding)
+        # flat_recon shape: [B, max_len * (state_dim + action_dim)]
+
+        # Reshape to [B, max_len, state_dim + action_dim]
+        recon = flat_recon.view(-1, self.max_len, self.state_dim + self.action_dim)
+
+        states = recon[..., : self.state_dim]
+        actions = recon[..., self.state_dim :]
+        return states, actions
+
+# ---------- Policy-Level Set Encoder ----------
+class PolicySetEncoder(nn.Module):
+    """
+    A permutation-invariant encoder for a *set* of trajectory embeddings.
+    Takes a set of [N, D] embeddings and outputs a single [1, D] embedding.
+    Uses a Transformer Encoder with a CLS token.
+    """
+    def __init__(self, emb_dim, hidden_dim, n_layers=2, n_heads=4, dropout=0.1):
+        super().__init__()
+        self.emb_dim = emb_dim
+        # Learnable [CLS] token
+        self.cls_token = nn.Parameter(th.randn(1, 1, emb_dim))
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=emb_dim, 
+            nhead=n_heads, 
+            dim_feedforward=hidden_dim, 
+            dropout=dropout, 
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, 
+            num_layers=n_layers
+        )
+    
+    def forward(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        """
+        Input: x (th.Tensor): A single set of trajectory embeddings.
+                             Shape: [N_trajs, emb_dim]
+        Output: (cls_output, all_tokens)
+            cls_output (th.Tensor): The learned policy embedding.
+                                    Shape: [1, emb_dim]
+            all_tokens (th.Tensor): All output tokens (including CLS).
+                                    Shape: [1, 1+N_trajs, emb_dim]
+        """
+        # Add a batch dimension -> [1, N_trajs, emb_dim]
+        x = x.unsqueeze(0) 
+        
+        # Prepend CLS token
+        cls_tokens = self.cls_token.expand(x.shape[0], -1, -1) # [1, 1, emb_dim]
+        x = th.cat((cls_tokens, x), dim=1) # [1, 1+N_trajs, emb_dim]
+        
+        # Pass through transformer
+        all_output_tokens = self.transformer_encoder(x) # [1, 1+N_trajs, emb_dim]
+        
+        # Get the CLS token output (the learned policy representation)
+        cls_output = all_output_tokens[:, 0, :] # [1, emb_dim]
+        
+        return cls_output, all_output_tokens
+
 
 # For DeepInfoMax Loss
-
-
 class Discriminator(nn.Module):
     """A simple MLP to distinguish between positive and negative pairs."""
 
@@ -907,7 +682,6 @@ class Discriminator(nn.Module):
 
     def forward(self, x: th.Tensor) -> th.Tensor:
         return self.net(x)
-
 
 class DeepInfoMaxLoss(nn.Module):
     """Deep InfoMax loss using a discriminator.
@@ -964,7 +738,6 @@ class DeepInfoMaxLoss(nn.Module):
 
         return masked_loss
 
-
 class InstanceLoss(nn.Module):
     def __init__(self, temperature, device):
         super(InstanceLoss, self).__init__()
@@ -1008,45 +781,3 @@ class InstanceLoss(nn.Module):
         loss /= N
 
         return loss
-
-
-def create_model_BECwASATyped(
-    input_channels,
-    cnn_output_dim,
-    steps,
-    nhead,
-    d_hid,
-    emb_dim,
-    num_actions,
-    nlayers,
-    input_coord_dims,
-    dropout=0.1,
-    gaussian_m_state=0,
-    gaussian_m_action=0,
-    gaussian_sigma_state=0,
-    gaussian_sigma_action=0,
-    pe_type="rope",
-):
-    """Factory function for the BehaviorEncoderCLSattnSATyped model."""
-    model = BehaviorEncoderCLSattnSATyped(
-        input_channels=input_channels,
-        cnn_output_dim=cnn_output_dim,
-        max_len=steps,
-        steps=steps,
-        nhead=nhead,
-        d_hid=d_hid,
-        emb_dim=emb_dim,
-        num_actions=num_actions,
-        nlayers=nlayers,
-        dropout=dropout,
-        # pe_type=pe_type,
-        input_coord_dims=input_coord_dims,
-        gaussian_m_state=gaussian_m_state,
-        gaussian_m_action=gaussian_m_action,
-        gaussian_sigma_state=gaussian_sigma_state,
-        gaussian_sigma_action=gaussian_sigma_action,
-    )
-    for p in model.parameters():
-        if p.dim() > 1:
-            nn.init.xavier_uniform_(p)
-    return model
