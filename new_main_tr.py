@@ -73,7 +73,7 @@ def main():
     arg_hyp.add_argument("--nlayers", type=int, default=2)
     arg_hyp.add_argument("--d_hid", type=int, default=1024)
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
-    arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--recon_weight", type=float, default=0.1)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
     arg_hyp.add_argument("--segment_weight", type=float, default=0.0)
