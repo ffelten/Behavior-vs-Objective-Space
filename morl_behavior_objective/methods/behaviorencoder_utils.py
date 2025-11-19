@@ -16,6 +16,7 @@ import umap  # type: ignore[import]
 from .behaviorencoder import *
 from typing import List,Dict
 import argparse
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 def prepare_sa_trajectories(
@@ -468,11 +469,84 @@ def datasets_preparation_ret(
     return full_dataset, train_set, val_set, test_set, train_loader, val_loader, test_loader, None
 
 # ---------- Training & Evaluation ----------
+# def train_epoch(
+#     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
+#     recon_weight, info_weight, dim_weight,
+#     segment_weight=0.0, env_id=None
+# ): # Removed vol_weight, decorr_weight, least_volumes
+#     encoder.train()
+#     decoder.train()
+#     dim_loss_fn.train()
+#     total_loss = 0.0
+
+#     for states, actions, masks, _, returns in loader:
+#         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
+
+#         # --- Two stochastic forward passes for contrastive learning ---
+#         all_tokens1, _, _, _, cls_emb1, _ = encoder(states, actions, src_key_padding_mask=masks)
+#         all_tokens2, _, _, _, cls_emb2, _ = encoder(states, actions, src_key_padding_mask=masks)
+        
+#         # Decoder can use either embedding, let's use the first one
+#         states_rec, actions_rec = decoder(cls_emb1)
+
+#         # --- Reconstruction Loss ---
+#         mask_flat = masks.view(masks.size(0), -1).unsqueeze(-1)
+#         valid = (~mask_flat).float()
+#         tgt_states = states
+#         tgt_actions = actions
+#         rec_state = ((states_rec - tgt_states).pow(2) * valid).sum() / valid.sum().clamp(min=1.0)
+#         rec_action = ((actions_rec - tgt_actions).pow(2) * valid).sum() / valid.sum().clamp(min=1.0)
+#         recon_loss = rec_state + rec_action
+
+#         # --- CORRECTED InfoNCE Loss ---
+#         info_loss = info_loss_fn(cls_emb1, cls_emb2)
+
+#         # --- Deep InfoMax Loss (averaged over both views) ---
+#         interleaved_mask = expand_interleaved_mask(masks)
+#         dim_loss1 = dim_loss_fn(cls_emb1, all_tokens1[:, 1:, :], interleaved_mask)
+#         dim_loss2 = dim_loss_fn(cls_emb2, all_tokens2[:, 1:, :], interleaved_mask)
+#         dim_loss = (dim_loss1 + dim_loss2) / 2.0
+
+#         # --- NEW Segment Contrastive Loss ---
+#         seg_loss = th.tensor(0.0, device=device)
+#         # if segment_weight > 0.0:
+#         #     # Define segment length L based on environment
+#         #     L_min, L_max = (2, 12) if "dst" in env_id or "sea" in env_id else (8, 16)
+#         #     T = states.shape[1]
+#         #     current_L_max = min(L_max, T - 1)
+#         #     L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
+            
+#         #     seg_loss1 = segment_contrastive_loss(cls_emb1, encoder, states, actions, masks, L, info_loss_fn, num_segments=4, pairwise_segments=True)
+#         #     seg_loss2 = segment_contrastive_loss(cls_emb2, encoder, states, actions, masks, L, info_loss_fn, num_segments=4, pairwise_segments=True)
+#         #     seg_loss = (seg_loss1 + seg_loss2) / 2.0
+
+#         # --- Other losses (removed) ---
+#         # decorr_loss = th.tensor(0.0, device=device)
+#         # vol_loss = th.tensor(0.0, device=device)
+
+#         # --- Total Weighted Loss ---
+#         loss = (
+#             recon_weight * recon_loss
+#             + info_weight * info_loss
+#             + dim_weight * dim_loss
+#             + segment_weight * seg_loss
+#             # Removed vol_loss and decorr_loss
+#         )
+        
+#         optim.zero_grad()
+#         loss.backward()
+#         th.nn.utils.clip_grad_norm_(encoder.parameters(), 1.0)
+#         th.nn.utils.clip_grad_norm_(decoder.parameters(), 1.0)
+#         optim.step()
+#         total_loss += loss.item()
+
+#     return total_loss / max(len(loader), 1)
+
 def train_epoch(
     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
     recon_weight, info_weight, dim_weight,
     segment_weight=0.0, env_id=None
-): # Removed vol_weight, decorr_weight, least_volumes
+):
     encoder.train()
     decoder.train()
     dim_loss_fn.train()
@@ -488,14 +562,30 @@ def train_epoch(
         # Decoder can use either embedding, let's use the first one
         states_rec, actions_rec = decoder(cls_emb1)
 
-        # --- Reconstruction Loss ---
-        mask_flat = masks.view(masks.size(0), -1).unsqueeze(-1)
-        valid = (~mask_flat).float()
-        tgt_states = states
-        tgt_actions = actions
-        rec_state = ((states_rec - tgt_states).pow(2) * valid).sum() / valid.sum().clamp(min=1.0)
-        rec_action = ((actions_rec - tgt_actions).pow(2) * valid).sum() / valid.sum().clamp(min=1.0)
-        recon_loss = rec_state + rec_action
+        # --- IMPROVED: Mask-Aware Reconstruction Loss ---
+        # Calculate valid lengths for each trajectory in the batch
+        valid_lengths = (~masks).sum(dim=1)  # [B]
+        
+        # Compute loss only over valid positions for each trajectory
+        rec_state_loss = 0.0
+        rec_action_loss = 0.0
+        total_valid_steps = 0
+        
+        B = states.size(0)
+        for b in range(B):
+            valid_len = int(valid_lengths[b].item())
+            if valid_len == 0:
+                continue
+            
+            # Loss for this trajectory (only over valid steps)
+            rec_state_loss += ((states_rec[b, :valid_len] - states[b, :valid_len]).pow(2).sum())
+            rec_action_loss += ((actions_rec[b, :valid_len] - actions[b, :valid_len]).pow(2).sum())
+            total_valid_steps += valid_len
+        
+        # Average over all valid steps in the batch
+        rec_state_loss = rec_state_loss / max(total_valid_steps, 1)
+        rec_action_loss = rec_action_loss / max(total_valid_steps, 1)
+        recon_loss = rec_state_loss + rec_action_loss
 
         # --- CORRECTED InfoNCE Loss ---
         info_loss = info_loss_fn(cls_emb1, cls_emb2)
@@ -506,22 +596,14 @@ def train_epoch(
         dim_loss2 = dim_loss_fn(cls_emb2, all_tokens2[:, 1:, :], interleaved_mask)
         dim_loss = (dim_loss1 + dim_loss2) / 2.0
 
-        # --- NEW Segment Contrastive Loss ---
+        # --- Segment Contrastive Loss ---
         seg_loss = th.tensor(0.0, device=device)
-        # if segment_weight > 0.0:
-        #     # Define segment length L based on environment
-        #     L_min, L_max = (2, 12) if "dst" in env_id or "sea" in env_id else (8, 16)
-        #     T = states.shape[1]
-        #     current_L_max = min(L_max, T - 1)
-        #     L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
-            
-        #     seg_loss1 = segment_contrastive_loss(cls_emb1, encoder, states, actions, masks, L, info_loss_fn, num_segments=4, pairwise_segments=True)
-        #     seg_loss2 = segment_contrastive_loss(cls_emb2, encoder, states, actions, masks, L, info_loss_fn, num_segments=4, pairwise_segments=True)
-        #     seg_loss = (seg_loss1 + seg_loss2) / 2.0
-
-        # --- Other losses (removed) ---
-        # decorr_loss = th.tensor(0.0, device=device)
-        # vol_loss = th.tensor(0.0, device=device)
+        if segment_weight > 0.0:
+            # Define segment length L based on environment
+            L_min, L_max = (1, 4) if "dst" in env_id or "sea" in env_id else (8, 16)
+            T = states.shape[1]
+            current_L_max = min(L_max, T - 1)
+            L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
 
         # --- Total Weighted Loss ---
         loss = (
@@ -529,7 +611,6 @@ def train_epoch(
             + info_weight * info_loss
             + dim_weight * dim_loss
             + segment_weight * seg_loss
-            # Removed vol_loss and decorr_loss
         )
         
         optim.zero_grad()
@@ -594,10 +675,14 @@ def train_epoch_no_norm(
         # decorr_loss = th.tensor(0.0, device=device)
         # vol_loss = th.tensor(0.0, device=device)
 
-        # --- Segment Contrastive Loss (handles its own normalization internally) ---
+        # --- Segment Contrastive Loss ---
         seg_loss = th.tensor(0.0, device=device)
-        # if segment_weight > 0.0:
-        #     ... (This part remains unchanged as the function normalizes internally)
+        if segment_weight > 0.0:
+            # Define segment length L based on environment
+            L_min, L_max = (4, 12) if "dst" in env_id or "sea" in env_id else (8, 16)
+            T = states.shape[1]
+            current_L_max = min(L_max, T - 1)
+            L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
 
         # --- Total Weighted Loss ---
         loss = (
@@ -605,7 +690,6 @@ def train_epoch_no_norm(
             + info_weight * info_loss
             + dim_weight * dim_loss
             + segment_weight * seg_loss
-            # Removed vol_loss and decorr_loss
         )
         
         optim.zero_grad()
@@ -836,6 +920,95 @@ def visualize_policy_embeddings(
     # plt.show()
     plt.close()
 
+def visualize_policy_embeddings_with_lines(
+    policy_latents: Dict[int, np.ndarray],
+    emb_dim: int,
+    title: str = "Aggregated Policy Embeddings",
+    save_path: str = None
+):
+    """
+    Visualizes a dictionary of aggregated policy embeddings with CONNECTING LINES.
+    """
+    if emb_dim < 2:
+        print(f"Embedding dimension < 2; skipping visualization for '{title}'.")
+        return
+
+    # 1. Extract and Sort by Policy ID (Crucial for lines!)
+    sorted_pids = sorted(policy_latents.keys())
+    agg_embeddings = np.array([policy_latents[pid] for pid in sorted_pids])
+    
+    # Ensure embeddings are 2D
+    if agg_embeddings.ndim == 1:
+        agg_embeddings = agg_embeddings.reshape(-1, 1)
+        
+    unique_policies = np.unique(sorted_pids)
+    palette = sns.color_palette("tab10", n_colors=max(len(unique_policies), 3))
+    # Use modulo to cycle colors if K > 10
+    color_map = {pid: palette[i % len(palette)] for i, pid in enumerate(unique_policies)}
+
+    fig = plt.figure(figsize=(8, 6))
+    
+    # Handle different dimensions for plotting
+    plot_title = title
+    
+    # Check if we need UMAP (for >3 dims) or direct plotting
+    if emb_dim > 3:
+        plot_title = f"{title} ({emb_dim}D -> 3D UMAP)"
+        print(f"Reducing {emb_dim}D -> 3D with UMAP for '{title}' visualization.")
+        reducer = umap.UMAP(n_components=3, random_state=42)
+        plot_embeddings = reducer.fit_transform(agg_embeddings)
+        ax = fig.add_subplot(111, projection="3d")
+        
+        # --- DRAW LINES (UMAP Space) ---
+        ax.plot(plot_embeddings[:, 0], plot_embeddings[:, 1], plot_embeddings[:, 2], 
+                color='gray', alpha=0.5, linewidth=1.5, linestyle='--')
+
+        for i, pid in enumerate(sorted_pids):
+            pts = plot_embeddings[i, :]
+            ax.scatter(pts[0], pts[1], pts[2], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], pts[2], str(pid), color='black', fontsize=12, ha='right', va='bottom')
+        ax.set_xlabel("UMAP Dim 1"); ax.set_ylabel("UMAP Dim 2"); ax.set_zlabel("UMAP Dim 3")
+        
+    elif emb_dim == 3:
+        plot_title = f"{title} (3D)"
+        ax = fig.add_subplot(111, projection="3d")
+        
+        # --- DRAW LINES (Direct 3D Space) ---
+        # This connects P0 -> P1 -> P2 ...
+        ax.plot(agg_embeddings[:, 0], agg_embeddings[:, 1], agg_embeddings[:, 2], 
+                color='black', alpha=0.4, linewidth=1, linestyle='--')
+
+        for i, pid in enumerate(sorted_pids):
+            pts = agg_embeddings[i, :3]
+            ax.scatter(pts[0], pts[1], pts[2], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], pts[2], str(pid), color='black', fontsize=12, ha='right', va='bottom')
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2"); ax.set_zlabel("Dim 3")
+        
+    else: # emb_dim == 2
+        plot_title = f"{title} (2D)"
+        ax = fig.add_subplot(111)
+        
+        # --- DRAW LINES (2D Space) ---
+        ax.plot(agg_embeddings[:, 0], agg_embeddings[:, 1], 
+                color='gray', alpha=0.5, linewidth=1.5, linestyle='--')
+
+        for i, pid in enumerate(sorted_pids):
+            pts = agg_embeddings[i, :2]
+            ax.scatter(pts[0], pts[1], c=[color_map[pid]], label=f"Policy {pid}", s=100, alpha=0.9)
+            ax.text(pts[0], pts[1], str(pid), color='black', fontsize=12, ha='right', va='bottom')
+        ax.set_xlabel("Dim 1"); ax.set_ylabel("Dim 2")
+
+    ax.set_title(plot_title)
+    # ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5)) # Optional: comment out if legend is too big
+    plt.tight_layout()
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, bbox_inches="tight")
+        print(f"Saved aggregated embedding visualization to {save_path}")
+    # plt.show()
+    plt.close()
+
 def get_mean_policy_embeddings(
     embeddings: np.ndarray, 
     policies: np.ndarray
@@ -886,7 +1059,7 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
         name_env = "mo-highway-fast-v0"
         num_policies = 41
         env_id = "mo-highway-fast-v0"
-        base_trajectories_path = f"trajectories/morld/{name_env}_test/" # Highway's base path
+        base_trajectories_path = f"trajectories/morld/{name_env}/" # Highway's base path
         is_seeded_env = True
     elif args.MOHopper:
         name_env = "mo-hopper-v5"
@@ -940,7 +1113,12 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
         if ret_vec is not None:
             obj_feats_list.append(np.asarray(ret_vec, dtype=np.float64))
 
-        for states, actions in data['trajectories']:
+        if args.DeepSeaTreasureConcave or args.DeepSeaTreasureSmooth or args.DeepSeaTreasureLeftRight:
+            loaded_trajectories = data['trajectories']
+        else:
+            loaded_trajectories = data['trajectories']
+
+        for states, actions in loaded_trajectories:
             obs = np.array(list(states) + [states[-1]], dtype=np.float32)
             acts = np.array(actions, dtype=np.float32)
             if acts.ndim ==1: acts = acts.reshape(-1,1)

@@ -31,6 +31,7 @@ from morl_behavior_objective.methods.behaviorencoder_utils import (
     load_environment_data,
     generate_experiment_name,
     save_policy_latents_to_json,
+    visualize_policy_embeddings_with_lines,
     visualize_trajectory_embeddings,
     visualize_policy_embeddings,
 )
@@ -45,14 +46,14 @@ def main():
     parser = argparse.ArgumentParser()
     # Add all arguments from main_morl_BE.py for consistency
     arg_env = parser.add_argument_group('Environment Selection')
-    arg_env.add_argument("-DSTC","--DeepSeaTreasureConcave", help="DeepSeaTreasureConcave environment",action="store_true")
+    arg_env.add_argument("-DSTC","--DeepSeaTreasureConcave", help="DeepSeaTreasureConcave environment",action="store_true") #no exp
     arg_env.add_argument("-DSTS","--DeepSeaTreasureSmooth", help="DeepSeaTreasureSmooth environment",action="store_true")
     arg_env.add_argument("-DSTLR","--DeepSeaTreasureLeftRight", help="DeepSeaTreasureLeftRight environment",action="store_true")
     arg_env.add_argument("-MHC","--MOHalfCheetah", help="MO-HalfCheetah environment",action="store_true")
     arg_env.add_argument("-MHW","--MOHighway", help="MO-Highway environment",action="store_true")
     arg_env.add_argument("-MHo2","--MOHopper2obj", help="MO-Hopper environment with 2 objectives",action="store_true")
     arg_env.add_argument("-MHo","--MOHopper", help="MO-Hopper environment",action="store_true")
-    arg_env.add_argument("-RG", "--ResourceGathering", help="ResourceGathering environment", action="store_true")
+    arg_env.add_argument("-RG", "--ResourceGathering", help="ResourceGathering environment", action="store_true") #no exp
 
     arg_viz = parser.add_argument_group('Visualizations and Directories')
     arg_viz.add_argument("--viz_policy_ids", type=int, nargs='+', default=None, help="List of policy IDs to label in the pre-aggregation visualization.")
@@ -60,6 +61,7 @@ def main():
     arg_viz.add_argument("--model_dir", default="models/no_topo/")
     arg_viz.add_argument("--model_prefix", default="be")
     arg_viz.add_argument("--save_data", action="store_true", help="Save the aggregated policy embeddings to a JSON file")
+    arg_viz.add_argument("--with_lines", action="store_true", help="Whether to connect policy embeddings with lines in the visualization")
 
     arg_hyp = parser.add_argument_group('Training Hyperparameters')
     arg_hyp.add_argument("--device", default="cuda" if th.cuda.is_available() else "mps" if th.backends.mps.is_available() else "cpu")
@@ -67,11 +69,11 @@ def main():
     arg_hyp.add_argument("--batch_size", type=int, default=32)
     arg_hyp.add_argument("--lr", type=float, default=3e-4)
     arg_hyp.add_argument("--emb_dim", type=int, default=3)
-    arg_hyp.add_argument("--nheads", type=int, default=3)
+    arg_hyp.add_argument("--nheads", type=int, default=4)
     arg_hyp.add_argument("--nlayers", type=int, default=2)
     arg_hyp.add_argument("--d_hid", type=int, default=1024)
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
-    arg_hyp.add_argument("--recon_weight", type=float, default=0.1)
+    arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
     arg_hyp.add_argument("--segment_weight", type=float, default=0.0)
@@ -86,12 +88,12 @@ def main():
     arg_set = parser.add_argument_group('Set Encoder Hyperparameters')
     arg_set.add_argument("--use_set_encoder", action="store_true", help="Whether to train a policy-level set encoder")
     arg_set.add_argument("--train_set", action="store_true", help="Whether to train the policy-level set encoder")
-    arg_set.add_argument("--set_epochs", type=int, default=500, help="Number of epochs to train the policy-level set encoder")
+    arg_set.add_argument("--set_epochs", type=int, default=200, help="Number of epochs to train the policy-level set encoder")
     arg_set.add_argument("--set_lr", type=float, default=1e-3, help="Learning rate for the set encoder")
     arg_set.add_argument("--set_info_weight", type=float, default=1.0, help="InfoNCE loss weight for set encoder")
     arg_set.add_argument("--set_dim_weight", type=float, default=1.0, help="DIM loss weight for set encoder")
     arg_set.add_argument("--set_n_layers", type=int, default=2, help="Number of layers for set encoder transformer")
-    arg_set.add_argument("--set_n_heads", type=int, default=3, help="Number of heads for set encoder transformer")
+    arg_set.add_argument("--set_n_heads", type=int, default=4, help="Number of heads for set encoder transformer")
     arg_set.add_argument("--set_d_hid", type=int, default=1024, help="Hidden dimension for set encoder transformer")
 
     args = parser.parse_args()
@@ -109,6 +111,17 @@ def main():
     env_code = "DSTC" if args.DeepSeaTreasureConcave else "DSTS" if args.DeepSeaTreasureSmooth else "DSTLR" if args.DeepSeaTreasureLeftRight else \
                "MHC" if args.MOHalfCheetah else "MHW" if args.MOHighway else "MHo2" if args.MOHopper2obj else "MHo" if args.MOHopper \
                else "RG" if args.ResourceGathering else "UNK"
+    
+    if env_code == "DSTC" or env_code == "DSTS" or env_code == "DSTLR":
+        gaussian_m_state = 64
+        gaussian_m_action = 32
+        gaussian_sigma_state = 10 
+        gaussian_sigma_action = 10
+    else:
+        gaussian_m_state = 1024
+        gaussian_m_action = 512
+        gaussian_sigma_state = 10 
+        gaussian_sigma_action = 10
     
     model_dir = args.model_dir+f"{env_code}/"
     args.model_dir = model_dir
@@ -156,16 +169,17 @@ def main():
     )
 
     # --- Model, Losses, and Optimizer ---
-    input_coord_dims = trajectories[0].obs.shape[1]
+    input_coord_dims = trajectories[-1].obs.shape[1]
     print("Input coordinate dimensions:", input_coord_dims)
-    print("Input action dimensions:", trajectories[0].acts.shape)
+    print("Input action dimensions:", trajectories[-1].acts.shape[1])
     num_actions = trajectories[0].acts.shape[1] if trajectories[0].acts.ndim > 1 else 1
     
     encoder = BehaviorEncoderCLSattnSATyped(
         input_channels=input_coord_dims, cnn_output_dim=args.emb_dim,steps=max_len, max_len=max_len,
         nhead=args.nheads, d_hid=args.d_hid, emb_dim=args.emb_dim,
         num_actions=num_actions, nlayers=args.nlayers, dropout=args.dropout,
-        input_coord_dims=input_coord_dims
+        input_coord_dims=input_coord_dims, gaussian_m_state=gaussian_m_state, gaussian_m_action=gaussian_m_action,
+        gaussian_sigma_state=gaussian_sigma_state, gaussian_sigma_action=gaussian_sigma_action,
     ).to(device)
 
     decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, num_actions, max_len).to(device) # Removed spec_norm
@@ -207,6 +221,16 @@ def main():
     print("Evaluating embeddings on the full dataset...")
     embeddings, policies = get_all_embeddings(encoder, loader, device)
 
+    norms = np.linalg.norm(embeddings, axis=1)
+    avg_norm = norms.mean()
+    min_norm = norms.min()
+    max_norm = norms.max()
+    print(f"\n--- NORMALIZATION CHECK ---")
+    print(f"Average Norm: {avg_norm:.4f} (Should be ~1.0)")
+    print(f"Min Norm:     {min_norm:.4f}")
+    print(f"Max Norm:     {max_norm:.4f}")
+    print(f"---------------------------\n")
+
     unique = np.unique(policies)
     # per-policy mean and adjacent distances
     policy_means = np.array([embeddings[policies==pid].mean(0) for pid in unique])
@@ -229,12 +253,20 @@ def main():
     mean_policy_latents = get_mean_policy_embeddings(embeddings, policies)
     
     viz_path_mean = os.path.join(image_dir, f"mean_{base_name}_seed{args.seed}.png")
-    visualize_policy_embeddings(
-        mean_policy_latents,
-        args.emb_dim,
-        title="Aggregated Policy Embeddings (Mean)",
-        save_path=viz_path_mean if args.save_data else None
-    )
+    if not args.with_lines:
+        visualize_policy_embeddings(
+            mean_policy_latents,
+            args.emb_dim,
+            title="Aggregated Policy Embeddings (Mean)",
+            save_path=viz_path_mean if args.save_data else None
+        )
+    else:
+        visualize_policy_embeddings_with_lines(
+            mean_policy_latents,
+            args.emb_dim,
+            title="Aggregated Policy Embeddings (Mean) with Lines",
+            save_path=viz_path_mean if args.save_data else None
+        )
 
 
     # -----------------------------------------------------------------
