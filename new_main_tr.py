@@ -15,6 +15,7 @@ from morl_behavior_objective.methods.behaviorencoder import (
     InstanceLoss,
     TrajectoryDecoder,
     PolicySetEncoder,
+    VarianceCovarianceLoss
 )
 from morl_behavior_objective.methods.behaviorencoder_utils import (
     apply_per_traj,
@@ -69,9 +70,9 @@ def main():
     arg_hyp.add_argument("--batch_size", type=int, default=32)
     arg_hyp.add_argument("--lr", type=float, default=3e-4)
     arg_hyp.add_argument("--emb_dim", type=int, default=3)
-    arg_hyp.add_argument("--nheads", type=int, default=4)
+    arg_hyp.add_argument("--nheads", type=int, default=1)
     arg_hyp.add_argument("--nlayers", type=int, default=2)
-    arg_hyp.add_argument("--d_hid", type=int, default=1024)
+    arg_hyp.add_argument("--d_hid", type=int, default=32)# dsts 64 dtslr 32
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
     arg_hyp.add_argument("--recon_weight", type=float, default=0.1)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
@@ -185,6 +186,7 @@ def main():
     decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, num_actions, max_len).to(device) # Removed spec_norm
     info_loss_fn = InstanceLoss(args.temperature, device=device)
     dim_loss_fn = DeepInfoMaxLoss(args.emb_dim).to(device)
+    vc_loss_fn = VarianceCovarianceLoss(std_coeff=25.0, cov_coeff=1.0).to(device)
 
     params = list(encoder.parameters()) + list(decoder.parameters()) + list(dim_loss_fn.parameters())
     optim = th.optim.AdamW(params, lr=args.lr)
@@ -202,10 +204,10 @@ def main():
         pbar = tqdm(range(args.epochs))
         for epoch in pbar:
             loss = train_epoch(
-                encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
+                encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn, vc_loss_fn,
                 args.recon_weight, args.info_weight, args.dim_weight,
                 args.segment_weight, env_id
-            ) # Updated call
+            )
             pbar.set_description(f"Epoch {epoch+1}/{args.epochs} | Loss: {loss:.4f}")
         os.makedirs(args.model_dir, exist_ok=True)
         th.save({"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()}, model_path)

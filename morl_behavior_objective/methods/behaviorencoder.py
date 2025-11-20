@@ -224,13 +224,14 @@ class CoordMLPEncoderGaussian(nn.Module):
         self.rff = GaussianFourierFeatureEmbed(in_dims=self.in_dims, m=m, sigma=sigma, learnable=learnable_proj)
         feat_dim = 2 * m
         self.net = nn.Sequential(
-            nn.Linear(feat_dim, d_model),
+            nn.Linear(feat_dim, feat_dim*2), # 1. Process in High Dim (128 -> 256)
             nn.GELU(),
             nn.Dropout(p=dropout),
-            nn.Linear(d_model, d_model),
+            nn.Linear(feat_dim*2, feat_dim*2),      # 2. Non-linear mixing (256 -> 256)
             nn.GELU(),
             nn.Dropout(p=dropout),
-            nn.LayerNorm(d_model),
+            nn.Linear(feat_dim*2, d_model),  # 3. Final Squeeze (256 -> 3)
+            # nn.LayerNorm(d_model),
         )
 
     def forward(self, coords: th.Tensor) -> th.Tensor:
@@ -239,19 +240,50 @@ class CoordMLPEncoderGaussian(nn.Module):
         x = self.rff(coords)
         return self.net(x)
 
-class TemporalConvEncoder(nn.Module):
-    """Takes per-step embeddings [B, L, D] and learns temporal patterns
-    via 1D convolutions over the sequence dimension, with optional dilation.
-    Returns refined embeddings [B, L, D].
-    """
+# class TemporalConvEncoder(nn.Module):
+#     """Takes per-step embeddings [B, L, D] and learns temporal patterns
+#     via 1D convolutions over the sequence dimension, with optional dilation.
+#     Returns refined embeddings [B, L, D].
+#     """
 
+#     def __init__(
+#         self,
+#         emb_dim: int,
+#         hidden_dim: int = 128,
+#         kernel_size: int = 3,
+#         num_layers: int = 2,
+#         use_dilation: bool = True,
+#         dropout: float = 0.1,
+#     ):
+#         super().__init__()
+#         layers = []
+#         in_ch = emb_dim
+#         for i in range(num_layers):
+#             out_ch = hidden_dim if i < num_layers - 1 else emb_dim
+#             # compute dilation and padding
+#             dilation = 2**i if use_dilation else 1
+#             padding = ((kernel_size - 1) // 2) * dilation
+#             layers.append(nn.Conv1d(in_ch, out_ch, kernel_size, padding=padding, dilation=dilation))
+#             layers.append(nn.ReLU(inplace=True))
+#             layers.append(nn.Dropout(dropout))
+#             in_ch = out_ch
+#         self.net = nn.Sequential(*layers)
+
+#     def forward(self, x: th.Tensor) -> th.Tensor:
+#         # x: [B, L, D] → [B, D, L]
+#         x = x.transpose(1, 2)
+#         x = self.net(x)  # [B, D, L]
+#         x = x.transpose(1, 2)  # [B, L, D]
+#         return x
+
+class TemporalConvEncoder(nn.Module):
     def __init__(
         self,
         emb_dim: int,
-        hidden_dim: int = 128,
+        hidden_dim: int = 16, # Reduced from 2048 to 16 (Safe expansion)
         kernel_size: int = 3,
         num_layers: int = 2,
-        use_dilation: bool = True,
+        use_dilation: bool = False,
         dropout: float = 0.1,
     ):
         super().__init__()
@@ -259,21 +291,33 @@ class TemporalConvEncoder(nn.Module):
         in_ch = emb_dim
         for i in range(num_layers):
             out_ch = hidden_dim if i < num_layers - 1 else emb_dim
-            # compute dilation and padding
             dilation = 2**i if use_dilation else 1
             padding = ((kernel_size - 1) // 2) * dilation
+            
             layers.append(nn.Conv1d(in_ch, out_ch, kernel_size, padding=padding, dilation=dilation))
-            layers.append(nn.ReLU(inplace=True))
-            layers.append(nn.Dropout(dropout))
+            
+            # CRITICAL FIX: Use GELU instead of ReLU to preserve negative coordinates
+            if i < num_layers - 1:
+                layers.append(nn.GELU()) 
+                layers.append(nn.Dropout(dropout))
+            
             in_ch = out_ch
+            
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: th.Tensor) -> th.Tensor:
-        # x: [B, L, D] → [B, D, L]
-        x = x.transpose(1, 2)
-        x = self.net(x)  # [B, D, L]
-        x = x.transpose(1, 2)  # [B, L, D]
-        return x
+        # x: [B, L, D]
+        x_in = x.transpose(1, 2) # [B, D, L]
+        
+        # Residual Connection: Output = Input + CNN_Feature
+        # This ensures we enrich the token without destroying the original coord
+        out = self.net(x_in)
+        
+        # If dims match (which they do at the end), add residual
+        if out.shape == x_in.shape:
+            out = out + x_in
+            
+        return out.transpose(1, 2) # [B, L, D]
 
 class GridEncoderDropout3D(nn.Module):
     """3D CNN encoder over a small temporal window.
@@ -344,236 +388,6 @@ class GridEncoderDropout3D(nn.Module):
 
 ## Behavior Encoder with SA tokenization and type embeddings
 
-# class BehaviorEncoderCLSattnSATyped(nn.Module):
-#     """A Behavior Encoder using Decision Transformer-style tokenization and positional embeddings.
-#     It processes sequences of states and actions by interleaving them and assigning a learned
-#     embedding to each timestep and modality (state/action).
-#     """
-
-#     def __init__(
-#         self,
-#         input_channels: int,
-#         cnn_output_dim: int,
-#         steps: int,
-#         nhead: int,
-#         d_hid: int,
-#         emb_dim: int,
-#         num_actions: int,
-#         nlayers: int = 6,
-#         dropout: float = 0.1,
-#         max_len: int = 100,
-#         input_coord_dims: int = 2,
-#         max_freq: float = 2.0,
-#         # NEW: choose coord encoders for states and continuous actions
-#         coord_state_kind: str = "gaussian",  # {'det','scaled','gaussian'}
-#         coord_action_kind: str = "gaussian",  # {'det','scaled','gaussian'}
-#         # NEW: per-kind hyperparams (kept simple; num_bands uses emb_dim by default)
-#         scaled_init_log_scale_state: float = 0.0,
-#         scaled_init_log_scale_action: float = 0.0,
-#         gaussian_m_state: int = 1024,
-#         gaussian_sigma_state: float = 10.0,
-#         gaussian_m_action: int = 512,
-#         gaussian_sigma_action: float = 10.0,
-#         normalize_output_embeddings: bool = True,
-#     ):
-#         super().__init__()
-#         self.d_model = emb_dim
-#         self.cls_token = nn.Parameter(th.randn(1, 1, emb_dim))
-#         self.model_type = "BE_SA_DT"
-#         self.input_coord_dims = input_coord_dims
-
-#         # Timestep embedding, as in Decision Transformer. Replaces standard PEs.
-#         self.embed_timestep = nn.Embedding(max_len, emb_dim)
-
-#         # Encoders for states (handles both grid and coordinate-based envs)
-#         self.cnn_encoder = GridEncoderDropout3D(
-#             in_channels=input_channels,
-#             out_dim=cnn_output_dim,
-#             hidden_channels=32,
-#             kernel_size=(3, 3, 3),
-#             pool_kernel=(1, 2, 2),
-#             dropout=dropout,
-#         )
-
-#         # State coord encoder (selectable)
-#         self.coord_encoder = self.make_coord_mlp_encoder(
-#             kind=coord_state_kind,
-#             d_model=emb_dim,
-#             d_hid=d_hid//32,
-#             in_dims=self.input_coord_dims,
-#             dropout=dropout,
-#             num_bands=emb_dim,  # keep your default width
-#             max_freq=max_freq,  # reuse provided max_freq
-#             init_log_scale=scaled_init_log_scale_state,
-#             m=gaussian_m_state,
-#             sigma=gaussian_sigma_state,
-#             learnable_proj=True,
-#         )
-#         self.temporal_encoder = TemporalConvEncoder(
-#             emb_dim=emb_dim, hidden_dim=d_hid, kernel_size=7, num_layers=1, dropout=dropout, use_dilation=False
-#         )
-
-#         # Encoder for actions
-#         self.action_encoder_discr = nn.Embedding(num_actions, emb_dim)
-
-#         # Continuous action encoder (selectable)
-#         self.action_encoder_cont = self.make_coord_mlp_encoder(
-#             kind=coord_action_kind,
-#             d_model=emb_dim,
-#             d_hid=d_hid//32,
-#             in_dims=num_actions,
-#             dropout=dropout,
-#             num_bands=emb_dim,
-#             max_freq=max_freq,
-#             init_log_scale=scaled_init_log_scale_action,
-#             m=gaussian_m_action,
-#             sigma=gaussian_sigma_action,
-#             learnable_proj=True,
-#         )
-#         self.action_temporal_encoder_cont = TemporalConvEncoder(
-#             emb_dim=emb_dim, hidden_dim=d_hid, kernel_size=7, num_layers=1, dropout=dropout, use_dilation=False
-#         )
-
-#         # Modality embeddings to differentiate states and actions
-#         self.state_type_embedding = nn.Parameter(th.randn(1, 1, emb_dim))
-#         self.action_type_embedding = nn.Parameter(th.randn(1, 1, emb_dim))
-
-#         self.input_proj = nn.Linear(cnn_output_dim, emb_dim) if cnn_output_dim != emb_dim else nn.Identity()
-
-#         encoder_layer_params = {
-#             "d_model": self.d_model,
-#             "nhead": nhead,
-#             "dim_feedforward": d_hid,
-#             "dropout": dropout,
-#             "activation": "relu",
-#             "batch_first": True,
-#         }
-#         self.transformer_encoder = CustomTransformerEncoder(encoder_layer_params, nlayers)
-#         self._dropout_p = dropout
-#         self._register_dropout_modules()
-#         # self.pooling = MHAPooling(emb_dim, num_heads=nhead)
-#         self.init_weights()
-#         print(
-#             f"Input treated with {coord_state_kind} fourier feature encoder for states and {coord_action_kind} fourier feature encoder for actions."
-#         )
-#         self.normalize_output_embeddings = normalize_output_embeddings
-
-#     @staticmethod
-#     def make_coord_mlp_encoder(
-#         kind: str,
-#         d_model: int,
-#         d_hid: int,
-#         in_dims: int,
-#         dropout: float = 0.1,
-#         # deterministic/scaled
-#         num_bands: int = 64,
-#         max_freq: float = 10.0,
-#         init_log_scale: float = 0.0,
-#         # gaussian
-#         m: int = 512,
-#         sigma: float = 10.0,
-#         learnable_proj: bool = False,
-#     ) -> nn.Module:
-#         r"""Kind \in {'det','scaled','gaussian'}"""
-#         kind = kind.lower()
-#         if kind == "det":
-#             return CoordMLPEncoder(d_model, in_dims=in_dims, num_bands=num_bands, max_freq=max_freq, dropout=dropout)
-#         if kind == "scaled":
-#             return CoordMLPEncoderScaled(
-#                 d_model,
-#                 in_dims=in_dims,
-#                 num_bands=num_bands,
-#                 max_freq=max_freq,
-#                 init_log_scale=init_log_scale,
-#                 dropout=dropout,
-#             )
-#         if kind == "gaussian":
-#             return CoordMLPEncoderGaussian(
-#                 d_model, in_dims=in_dims, d_hid=d_hid, m=m, sigma=sigma, learnable_proj=learnable_proj, dropout=dropout
-#             )
-#         raise ValueError(f"Unknown coord encoder kind: {kind}")
-
-#     def _register_dropout_modules(self):
-#         self._dropouts = []
-#         for m in self.modules():
-#             if isinstance(m, nn.Dropout):
-#                 self._dropouts.append(m)
-
-#     def set_dropout(self, p: float):
-#         for dr in self._dropouts:
-#             dr.p = p
-#         self._dropout_p = p
-
-#     def init_weights(self) -> None:
-#         for p in self.parameters():
-#             if p.dim() > 1:
-#                 nn.init.xavier_uniform_(p)
-
-#     def forward(self, states: th.Tensor, actions: th.Tensor, src_key_padding_mask: th.Tensor | None = None) -> tuple:
-#         B, T, *_ = states.shape
-
-#         # 1. Encode states based on their dimension (grid vs. coord)
-#         if states.dim() == 5:
-#             state_emb = self.cnn_encoder(states.view(B * T, *states.shape[2:])).view(B, T, -1)
-#         elif states.dim() == 3:
-#             state_emb = self.coord_encoder(states.view(B * T, -1)).view(B, T, -1)
-#             state_emb = self.temporal_encoder(state_emb)
-#         else:
-#             raise ValueError(f"Unsupported state dimension: {states.dim()}")
-#         state_emb = self.input_proj(state_emb)
-
-#         # 2. Encode actions
-#         if actions[0][0].dtype == th.int64:
-#             # Discrete actions
-#             action_emb = self.action_encoder_discr(actions)
-#         else:
-#             # Continuous actions
-#             flat_act = actions.view(B * T, -1)
-#             action_emb = self.action_encoder_cont(flat_act).view(B, T, self.d_model)
-#             action_emb = self.action_temporal_encoder_cont(action_emb)
-
-#         # 3. Add timestep and modality embeddings
-#         timesteps = th.arange(T, device=states.device).expand(B, T)
-#         timestep_embeddings = self.embed_timestep(timesteps)
-
-#         state_emb = state_emb + timestep_embeddings + self.state_type_embedding
-#         action_emb = action_emb + timestep_embeddings + self.action_type_embedding
-
-#         # 4. Interleave state and action embeddings to form the input sequence
-#         # -> [s0, a0, s1, a1, ...]
-#         interleaved_emb = th.stack([state_emb, action_emb], dim=2).view(B, 2 * T, self.d_model)
-
-#         # 5. Prepend CLS token
-#         cls = self.cls_token.expand(B, -1, -1)
-#         emb = th.cat([cls, interleaved_emb], dim=1)
-
-#         # 6. Adjust padding mask for the new interleaved sequence
-#         final_padding_mask = None
-#         if src_key_padding_mask is not None:
-#             cls_mask = th.zeros(B, 1, dtype=th.bool, device=src_key_padding_mask.device)
-#             interleaved_mask = src_key_padding_mask.unsqueeze(-1).expand(-1, -1, 2).reshape(B, 2 * T)
-#             final_padding_mask = th.cat([cls_mask, interleaved_mask], dim=1)
-
-#         # 7. Transformer pass
-
-#         transformer_out, attn_list = self.transformer_encoder(emb, src_mask=None, src_key_padding_mask=final_padding_mask)
-
-#         # 8. Normalize outputs and get trajectory summary
-#         if self.normalize_output_embeddings:
-#             norm = transformer_out.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
-#             normalized = transformer_out / norm
-#         else:
-#             normalized = transformer_out
-
-#         # pooled, pool_weights = self.pooling(transformer_out, final_padding_mask)
-#         cls_emb = normalized[:, 0, :]
-
-#         stacked_attns = th.stack(attn_list)
-#         cls_attn = stacked_attns[:, :, :, 0, :].mean(dim=(0, 2))
-#         attn_list_agg = stacked_attns.sum(dim=0).sum(dim=1)
-
-#         return normalized, attn_list_agg, _, _, cls_emb, cls_attn
-
 class BehaviorEncoderCLSattnSATyped(nn.Module):
     """A Behavior Encoder using Decision Transformer-style tokenization and positional embeddings.
     It processes sequences of states and actions by interleaving them and assigning a learned
@@ -597,7 +411,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         # NEW: choose coord encoders for states and continuous actions
         coord_state_kind: str = "gaussian",  # {'det','scaled','gaussian'}
         coord_action_kind: str = "gaussian",  # {'det','scaled','gaussian'}
-        # NEW: per-kind hyperparams
+        # NEW: per-kind hyperparams (kept simple; num_bands uses emb_dim by default)
         scaled_init_log_scale_state: float = 0.0,
         scaled_init_log_scale_action: float = 0.0,
         gaussian_m_state: int = 1024,
@@ -605,27 +419,20 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         gaussian_m_action: int = 512,
         gaussian_sigma_action: float = 10.0,
         normalize_output_embeddings: bool = True,
-        # --- CRITICAL CHANGE: Internal Dimension ---
-        internal_dim: int = 64, 
     ):
         super().__init__()
-        
-        # The Transformer and Encoders now use the larger 'internal_dim'
-        self.d_model = internal_dim 
-        # The final output (and loss/viz) uses the smaller 'emb_dim' (e.g. 3)
-        self.output_dim = emb_dim   
-        
-        self.cls_token = nn.Parameter(th.randn(1, 1, internal_dim))
+        self.d_model = emb_dim
+        self.cls_token = nn.Parameter(th.randn(1, 1, emb_dim))
         self.model_type = "BE_SA_DT"
         self.input_coord_dims = input_coord_dims
 
-        # Timestep embedding (uses internal_dim)
-        self.embed_timestep = nn.Embedding(max_len, internal_dim)
+        # Timestep embedding, as in Decision Transformer. Replaces standard PEs.
+        self.embed_timestep = nn.Embedding(max_len, emb_dim)
 
         # Encoders for states (handles both grid and coordinate-based envs)
         self.cnn_encoder = GridEncoderDropout3D(
             in_channels=input_channels,
-            out_dim=internal_dim, # Output to internal dimension
+            out_dim=cnn_output_dim,
             hidden_channels=32,
             kernel_size=(3, 3, 3),
             pool_kernel=(1, 2, 2),
@@ -633,85 +440,62 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         )
 
         # State coord encoder (selectable)
-        # CRITICAL FIX: num_bands uses internal_dim (64) instead of emb_dim (3)
-        # This ensures the Fourier features have high resolution.
         self.coord_encoder = self.make_coord_mlp_encoder(
             kind=coord_state_kind,
-            d_model=internal_dim,
-            d_hid=d_hid // 32,
+            d_model=emb_dim,
+            d_hid=d_hid//32,
             in_dims=self.input_coord_dims,
             dropout=dropout,
-            num_bands=internal_dim,  # High resolution bands
-            max_freq=max_freq,
+            num_bands=emb_dim,  # keep your default width
+            max_freq=max_freq,  # reuse provided max_freq
             init_log_scale=scaled_init_log_scale_state,
             m=gaussian_m_state,
             sigma=gaussian_sigma_state,
             learnable_proj=True,
         )
-        
         self.temporal_encoder = TemporalConvEncoder(
-            emb_dim=internal_dim, 
-            hidden_dim=d_hid, 
-            kernel_size=7, 
-            num_layers=1, 
-            dropout=dropout, 
-            use_dilation=False
+            emb_dim=emb_dim, hidden_dim=d_hid//4, kernel_size=7, num_layers=2, dropout=dropout, use_dilation=False
         )
 
         # Encoder for actions
-        self.action_encoder_discr = nn.Embedding(num_actions, internal_dim)
+        self.action_encoder_discr = nn.Embedding(num_actions, emb_dim)
 
         # Continuous action encoder (selectable)
         self.action_encoder_cont = self.make_coord_mlp_encoder(
             kind=coord_action_kind,
-            d_model=internal_dim,
-            d_hid=d_hid // 32,
+            d_model=emb_dim,
+            d_hid=d_hid//32,
             in_dims=num_actions,
             dropout=dropout,
-            num_bands=internal_dim, # High resolution bands
+            num_bands=emb_dim,
             max_freq=max_freq,
             init_log_scale=scaled_init_log_scale_action,
             m=gaussian_m_action,
             sigma=gaussian_sigma_action,
             learnable_proj=True,
         )
-        
         self.action_temporal_encoder_cont = TemporalConvEncoder(
-            emb_dim=internal_dim, 
-            hidden_dim=d_hid, 
-            kernel_size=7, 
-            num_layers=1, 
-            dropout=dropout, 
-            use_dilation=False
+            emb_dim=emb_dim, hidden_dim=d_hid//4, kernel_size=7, num_layers=2, dropout=dropout, use_dilation=False
         )
 
         # Modality embeddings to differentiate states and actions
-        self.state_type_embedding = nn.Parameter(th.randn(1, 1, internal_dim))
-        self.action_type_embedding = nn.Parameter(th.randn(1, 1, internal_dim))
+        self.state_type_embedding = nn.Parameter(th.randn(1, 1, emb_dim))
+        self.action_type_embedding = nn.Parameter(th.randn(1, 1, emb_dim))
 
-        # Input projection if CNN output dim doesn't match internal_dim
-        self.input_proj = nn.Linear(cnn_output_dim, internal_dim) if cnn_output_dim != internal_dim else nn.Identity()
+        self.input_proj = nn.Linear(cnn_output_dim, emb_dim) if cnn_output_dim != emb_dim else nn.Identity()
 
         encoder_layer_params = {
-            "d_model": self.d_model, # Now 64
+            "d_model": self.d_model,
             "nhead": nhead,
             "dim_feedforward": d_hid,
             "dropout": dropout,
-            "activation": "relu",
+            "activation": "gelu",
             "batch_first": True,
         }
         self.transformer_encoder = CustomTransformerEncoder(encoder_layer_params, nlayers)
-        
-        # --- NEW: Projection Head ---
-        # This reduces the rich 64-dim representation to the 3-dim vector for the sphere.
-        self.projection_head = nn.Sequential(
-            nn.Linear(internal_dim, internal_dim),
-            nn.ReLU(),
-            nn.Linear(internal_dim, emb_dim)
-        )
-        
         self._dropout_p = dropout
         self._register_dropout_modules()
+        # self.pooling = MHAPooling(emb_dim, num_heads=nhead)
         self.init_weights()
         print(
             f"Input treated with {coord_state_kind} fourier feature encoder for states and {coord_action_kind} fourier feature encoder for actions."
@@ -773,7 +557,6 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         B, T, *_ = states.shape
 
         # 1. Encode states based on their dimension (grid vs. coord)
-        # Output shape: [B, T, internal_dim]
         if states.dim() == 5:
             state_emb = self.cnn_encoder(states.view(B * T, *states.shape[2:])).view(B, T, -1)
         elif states.dim() == 3:
@@ -781,13 +564,9 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
             state_emb = self.temporal_encoder(state_emb)
         else:
             raise ValueError(f"Unsupported state dimension: {states.dim()}")
-        
-        # Ensure dimension match if needed
-        if state_emb.shape[-1] != self.d_model:
-            state_emb = self.input_proj(state_emb)
+        state_emb = self.input_proj(state_emb)
 
         # 2. Encode actions
-        # Output shape: [B, T, internal_dim]
         if actions[0][0].dtype == th.int64:
             # Discrete actions
             action_emb = self.action_encoder_discr(actions)
@@ -806,7 +585,6 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
 
         # 4. Interleave state and action embeddings to form the input sequence
         # -> [s0, a0, s1, a1, ...]
-        # Shape: [B, 2*T, internal_dim]
         interleaved_emb = th.stack([state_emb, action_emb], dim=2).view(B, 2 * T, self.d_model)
 
         # 5. Prepend CLS token
@@ -820,32 +598,24 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
             interleaved_mask = src_key_padding_mask.unsqueeze(-1).expand(-1, -1, 2).reshape(B, 2 * T)
             final_padding_mask = th.cat([cls_mask, interleaved_mask], dim=1)
 
-        # 7. Transformer pass (High Dimensional "Thinking")
-        # Output: [B, 2*T+1, internal_dim]
+        # 7. Transformer pass
+
         transformer_out, attn_list = self.transformer_encoder(emb, src_mask=None, src_key_padding_mask=final_padding_mask)
 
-        # 8. Project to Visualization Dimension (3D)
-        # We project ALL tokens so that DIM loss can operate on matching dimensions if needed
-        # Output: [B, 2*T+1, emb_dim]
-        projected_out = self.projection_head(transformer_out)
-
-        # 9. Normalize outputs and get trajectory summary
+        # 8. Normalize outputs and get trajectory summary
         if self.normalize_output_embeddings:
-            norm = projected_out.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
-            normalized = projected_out / norm
+            norm = transformer_out.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
+            normalized = transformer_out / norm
         else:
-            normalized = projected_out
+            normalized = transformer_out
 
-        # Extract CLS token for clustering/viz
+        # pooled, pool_weights = self.pooling(transformer_out, final_padding_mask)
         cls_emb = normalized[:, 0, :]
 
         stacked_attns = th.stack(attn_list)
         cls_attn = stacked_attns[:, :, :, 0, :].mean(dim=(0, 2))
         attn_list_agg = stacked_attns.sum(dim=0).sum(dim=1)
 
-        # We return 'normalized' (which is the full sequence projected to 3D)
-        # This ensures your DeepInfoMax loss works without modification 
-        # (comparing 3D CLS to 3D local tokens)
         return normalized, attn_list_agg, _, _, cls_emb, cls_attn
 
 # Decoder  
@@ -888,7 +658,7 @@ class PolicySetEncoder(nn.Module):
         self, 
         emb_dim: int,         # Input/Output dimension (e.g., 3)
         hidden_dim: int,      # FFN dimension (e.g., 1024)
-        internal_dim: int = 64, # NEW: Transformer working dimension
+        internal_dim: int = 3, # NEW: Transformer working dimension
         n_layers: int = 2, 
         n_heads: int = 4, 
         dropout: float = 0.1
@@ -1057,3 +827,34 @@ class InstanceLoss(nn.Module):
         loss /= N
 
         return loss
+
+class VarianceCovarianceLoss(nn.Module):
+    """
+    Forces embeddings to span the full D-dimensional space (Variance)
+    and ensures dimensions are orthogonal (Covariance).
+    Based on VICReg.
+    """
+    def __init__(self, std_coeff=25.0, cov_coeff=1.0):
+        super().__init__()
+        self.std_coeff = std_coeff
+        self.cov_coeff = cov_coeff
+
+    def forward(self, z):
+        # z: [Batch, Dim]
+        batch_size, num_features = z.shape
+        
+        # 1. Centering
+        z = z - z.mean(dim=0)
+
+        # 2. Variance Loss: Force std of each dim to be close to 1.0
+        # This prevents collapse (all points mapping to 0 or a single line)
+        std_z = th.sqrt(z.var(dim=0) + 0.0001)
+        std_loss = th.mean(F.relu(1 - std_z)) 
+
+        # 3. Covariance Loss: Force off-diagonal covariances to 0
+        # This prevents all 3 dimensions from being correlated (forming a line)
+        cov_z = (z.T @ z) / (batch_size - 1)
+        off_diag_mask = ~th.eye(num_features, device=z.device, dtype=th.bool)
+        cov_loss = cov_z[off_diag_mask].pow(2).sum() / num_features
+
+        return self.std_coeff * std_loss + self.cov_coeff * cov_loss

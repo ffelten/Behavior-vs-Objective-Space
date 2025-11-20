@@ -302,7 +302,44 @@ def apply_per_traj(list_of_td, scaler):
         out.append(scaler.transform(s_np.reshape(-1, D)).reshape(T, D))
     return out
 
-# ---------- Loss Functions ----------
+def datasets_preparation_ret(
+    all_states, all_actions, all_masks, all_labels,
+    train_size, val_size, test_size,
+    loader_batch, val_bptt, test_bptt, seed,
+    returns=None
+):
+    """
+    Prepares datasets and DataLoaders for training, validation, and testing,
+    including trajectory returns.
+    """
+    
+
+    # Ensure returns are provided and have the correct length
+    if returns is None or len(returns) != len(all_states):
+        raise ValueError("Returns must be provided and match the number of trajectories.")
+
+    # Convert returns to a tensor
+    returns_tensor = th.tensor(np.array(returns), dtype=th.float32)
+
+    # Create a full dataset including returns
+    full_dataset = TensorDataset(all_states, all_actions, all_masks, all_labels, returns_tensor)
+
+    # Split dataset into training, validation, and test sets
+    if val_size > 0 or test_size > 0:
+        train_set, val_set, test_set = random_split(
+            full_dataset, [train_size, val_size, test_size],
+            generator=th.Generator().manual_seed(seed)
+        )
+    else:
+        train_set, val_set, test_set = full_dataset, None, None
+
+    # Create DataLoaders
+    train_loader = DataLoader(train_set, batch_size=loader_batch, shuffle=True)
+    val_loader = DataLoader(val_set, batch_size=val_bptt) if val_set else None
+    test_loader = DataLoader(test_set, batch_size=test_bptt) if test_set else None
+
+    return full_dataset, train_set, val_set, test_set, train_loader, val_loader, test_loader, None
+
 def extract_scalar_returns(returns):
     """
     Extracts a single scalar value from various return formats.
@@ -330,6 +367,7 @@ def extract_scalar_returns(returns):
             values.append(float(ret))
     return values
 
+# ---------- Loss Functions ----------
 # Note: loss_vol_simplified and decorrelation_loss are no longer called
 # They are left here for posterity but could be removed.
 def loss_vol_simplified(z_normalized):
@@ -430,44 +468,6 @@ def segment_contrastive_loss(
     loss = loss_full_vs_segs + loss_pairwise
     return loss
 
-def datasets_preparation_ret(
-    all_states, all_actions, all_masks, all_labels,
-    train_size, val_size, test_size,
-    loader_batch, val_bptt, test_bptt, seed,
-    returns=None
-):
-    """
-    Prepares datasets and DataLoaders for training, validation, and testing,
-    including trajectory returns.
-    """
-    
-
-    # Ensure returns are provided and have the correct length
-    if returns is None or len(returns) != len(all_states):
-        raise ValueError("Returns must be provided and match the number of trajectories.")
-
-    # Convert returns to a tensor
-    returns_tensor = th.tensor(np.array(returns), dtype=th.float32)
-
-    # Create a full dataset including returns
-    full_dataset = TensorDataset(all_states, all_actions, all_masks, all_labels, returns_tensor)
-
-    # Split dataset into training, validation, and test sets
-    if val_size > 0 or test_size > 0:
-        train_set, val_set, test_set = random_split(
-            full_dataset, [train_size, val_size, test_size],
-            generator=th.Generator().manual_seed(seed)
-        )
-    else:
-        train_set, val_set, test_set = full_dataset, None, None
-
-    # Create DataLoaders
-    train_loader = DataLoader(train_set, batch_size=loader_batch, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=val_bptt) if val_set else None
-    test_loader = DataLoader(test_set, batch_size=test_bptt) if test_set else None
-
-    return full_dataset, train_set, val_set, test_set, train_loader, val_loader, test_loader, None
-
 # ---------- Training & Evaluation ----------
 # def train_epoch(
 #     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
@@ -543,9 +543,9 @@ def datasets_preparation_ret(
 #     return total_loss / max(len(loader), 1)
 
 def train_epoch(
-    encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
+    encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn, vc_loss_fn,
     recon_weight, info_weight, dim_weight,
-    segment_weight=0.0, env_id=None
+    segment_weight=0.0, env_id=None, vc_weight=0.01
 ):
     encoder.train()
     decoder.train()
@@ -605,12 +605,15 @@ def train_epoch(
             current_L_max = min(L_max, T - 1)
             L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
 
+        vc_reg = vc_loss_fn(cls_emb1) + vc_loss_fn(cls_emb2)
+
         # --- Total Weighted Loss ---
         loss = (
             recon_weight * recon_loss
             + info_weight * info_loss
             + dim_weight * dim_loss
             + segment_weight * seg_loss
+            + vc_weight * vc_reg
         )
         
         optim.zero_grad()
@@ -621,6 +624,45 @@ def train_epoch(
         total_loss += loss.item()
 
     return total_loss / max(len(loader), 1)
+
+# def train_epoch_sigreg(encoder, loader, optim, device, sigreg_loss_fn, lambda_reg=10.0):
+#     encoder.train()
+#     total_loss = 0.0
+    
+#     for states, actions, masks, _, _ in loader:
+#         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
+        
+#         # 1. Generate Two Views (Dropout serves as augmentation)
+#         # Pass 1 (Source)
+#         z1, _ = encoder(states, actions, src_key_padding_mask=masks)
+#         # Pass 2 (Target)
+#         z2, _ = encoder(states, actions, src_key_padding_mask=masks)
+        
+#         # 2. Prediction Loss
+#         # Predict z2 from z1
+#         pred_z2 = encoder.predictor(z1)
+#         # Predict z1 from z2 (Symmetrized)
+#         pred_z1 = encoder.predictor(z2)
+        
+#         # MSE Prediction Error (Stop Gradient on targets is NOT needed in LeJEPA, 
+#         # but often good practice. LeJEPA paper says SIGReg stabilizes it without stop-grad).
+#         # Let's follow pure LeJEPA: No stop-grad needed if Reg is strong.
+#         loss_pred = F.mse_loss(pred_z2, z2) + F.mse_loss(pred_z1, z1)
+        
+#         # 3. SIGReg Loss (Regularization)
+#         # Force z1 and z2 to be Gaussian
+#         loss_reg = sigreg_loss_fn(z1) + sigreg_loss_fn(z2)
+        
+#         # Total Loss
+#         loss = loss_pred + (lambda_reg * loss_reg)
+        
+#         optim.zero_grad()
+#         loss.backward()
+#         optim.step()
+        
+#         total_loss += loss.item()
+        
+#     return total_loss / len(loader)
 
 def train_epoch_no_norm(
     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
@@ -1006,7 +1048,7 @@ def visualize_policy_embeddings_with_lines(
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path, bbox_inches="tight")
         print(f"Saved aggregated embedding visualization to {save_path}")
-    # plt.show()
+    plt.show()
     plt.close()
 
 def get_mean_policy_embeddings(
