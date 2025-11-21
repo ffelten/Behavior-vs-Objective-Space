@@ -72,7 +72,7 @@ def main():
     arg_hyp.add_argument("--emb_dim", type=int, default=3)
     arg_hyp.add_argument("--nheads", type=int, default=1)
     arg_hyp.add_argument("--nlayers", type=int, default=2)
-    arg_hyp.add_argument("--d_hid", type=int, default=32)# dsts 64 dtslr 32
+    arg_hyp.add_argument("--d_hid", type=int, default=128)# dsts 64 dtslr 32
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
     arg_hyp.add_argument("--recon_weight", type=float, default=0.1)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
@@ -119,10 +119,10 @@ def main():
         gaussian_sigma_state = 10 
         gaussian_sigma_action = 10
     else:
-        gaussian_m_state = 1024
-        gaussian_m_action = 512
-        gaussian_sigma_state = 10 
-        gaussian_sigma_action = 10
+        gaussian_m_state = 128
+        gaussian_m_action = 32
+        gaussian_sigma_state = 5 
+        gaussian_sigma_action = 5
     
     model_dir = args.model_dir+f"{env_code}/"
     args.model_dir = model_dir
