@@ -11,10 +11,10 @@ import numpy.typing as npt
 
 params = {
     "algo": "morld",
-    "env_id": "mo-hopper-2obj-v5",  # "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
+    "env_id": "mo-hopper-v5",  # "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
     "num_timesteps": 1_000_000,
     "gamma": 0.99,
-    "ref_point": [-100, -100],  # [-1, -1, -40],  # [-100, -100],
+    "ref_point": [-100, -100, -100],  # [-1, -1, -40],  # [-100, -100],
     "seed": 0,
     "wandb_entity": "florian-felten",
     "init_hyperparams": {
@@ -286,6 +286,4 @@ if __name__ == "__main__":
     # pf= get_pareto_front("trajectories/morld/mo-highway-fast-v0_100steps_test", pareto_size=41)
     # print(pf)
     # visualize_pareto_front(pf, save_html="pareto_front.html")
-    render_policy(
-        env_id="mo-halfcheetah-v4", check_point="MORL_policies/morld_cheetah_v5/seed0.tar", policy_id=50, save_dic="videos"
-    )
+    render_policy(env_id="mo-highway-fast-v0", check_point="MORL_policies/mo-highway-fast-v0/seed0.tar", policy_id=28, n_episodes=5, save_dic=f"videos/highway/{28}", fps=20)
