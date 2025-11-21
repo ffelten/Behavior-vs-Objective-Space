@@ -94,7 +94,7 @@ def main():
     arg_set.add_argument("--set_info_weight", type=float, default=1.0, help="InfoNCE loss weight for set encoder")
     arg_set.add_argument("--set_dim_weight", type=float, default=1.0, help="DIM loss weight for set encoder")
     arg_set.add_argument("--set_n_layers", type=int, default=2, help="Number of layers for set encoder transformer")
-    arg_set.add_argument("--set_n_heads", type=int, default=4, help="Number of heads for set encoder transformer")
+    arg_set.add_argument("--set_n_heads", type=int, default=1, help="Number of heads for set encoder transformer")
     arg_set.add_argument("--set_d_hid", type=int, default=1024, help="Hidden dimension for set encoder transformer")
 
     args = parser.parse_args()
@@ -357,6 +357,7 @@ def main():
                 emb_set = policy_data[pid]["embeddings"]
                 # Get the CLS token (first element of tuple)
                 learned_emb = set_encoder(emb_set)[0].squeeze().cpu().numpy()
+                learned_emb = list(learned_emb.astype(float))
                 learned_policy_latents[int(pid)] = learned_emb
         
         # --- Visualize Learned Embeddings ---
