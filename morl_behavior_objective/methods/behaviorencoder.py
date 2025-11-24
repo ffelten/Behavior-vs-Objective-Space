@@ -1,11 +1,12 @@
 import math
 
-import torch as th # type: ignore[import]
-from torch import nn # type: ignore[import]
-import torch.nn.functional as F # type: ignore[import]
+import torch as th  # type: ignore[import]
+from torch import nn  # type: ignore[import]
+import torch.nn.functional as F  # type: ignore[import]
 from typing import Tuple
 
 # Transformer
+
 
 class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation="relu", batch_first=True):
@@ -45,6 +46,7 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         src = self.norm2(src)
         return src, attn_weights
 
+
 class CustomTransformerEncoder(nn.Module):
     def __init__(self, encoder_layer_params, num_layers):
         super().__init__()
@@ -66,6 +68,7 @@ class CustomTransformerEncoder(nn.Module):
         output = self.norm(output)
         return output, attn_weights_list
 
+
 class FourierFeatureEmbed(nn.Module):
     """Maps coords to high-dim Fourier features."""
 
@@ -82,6 +85,7 @@ class FourierFeatureEmbed(nn.Module):
         x_cos = th.cos(x_proj)
         # concat along last dim → [B*L, 2 * num_bands]
         return th.cat([x_sin, x_cos], dim=-1).view(x.shape[0], -1)
+
 
 class ScaledFourierFeatureEmbed(nn.Module):
     """Deterministic per-dimension Fourier features with learnable per-dim scale.
@@ -101,6 +105,7 @@ class ScaledFourierFeatureEmbed(nn.Module):
         x_scaled = x * self.log_scale.exp()  # [N, in_dims]
         x_proj = 2 * math.pi * x_scaled.unsqueeze(-1) * self.bands  # [N, in_dims, num_bands]
         return th.cat([th.sin(x_proj), th.cos(x_proj)], dim=-1).reshape(x.shape[0], -1)
+
 
 class GaussianFourierFeatureEmbed(nn.Module):
     """Random Fourier Features (RFF) with a shared projection across dims:
@@ -134,6 +139,7 @@ class GaussianFourierFeatureEmbed(nn.Module):
         if self.normalize_out:
             z = z / math.sqrt(self.m)  # optional variance stabilization
         return z  # [N, 2m]
+
 
 class CoordMLPEncoder(nn.Module):
     """Embeds 2-D coords into d_model via Fourier features + MLP + LayerNorm,
@@ -170,6 +176,7 @@ class CoordMLPEncoder(nn.Module):
         x = self.net(x)  # [B*L, d_model]
         return x
 
+
 class CoordMLPEncoderScaled(nn.Module):
     """Deterministic bands + learnable per-dimension scale (higher sensitivity without huge max_freq)."""
 
@@ -204,6 +211,7 @@ class CoordMLPEncoderScaled(nn.Module):
         x = self.ff(coords)
         return self.net(x)
 
+
 class CoordMLPEncoderGaussian(nn.Module):
     """Random Fourier Features (RFF) using a shared Gaussian projection; mixes dimensions.
     Output feature size is 2*m (independent of in_dims).
@@ -224,13 +232,13 @@ class CoordMLPEncoderGaussian(nn.Module):
         self.rff = GaussianFourierFeatureEmbed(in_dims=self.in_dims, m=m, sigma=sigma, learnable=learnable_proj)
         feat_dim = 2 * m
         self.net = nn.Sequential(
-            nn.Linear(feat_dim, feat_dim*2), # 1. Process in High Dim (128 -> 256)
+            nn.Linear(feat_dim, feat_dim * 2),  # 1. Process in High Dim (128 -> 256)
             nn.GELU(),
             nn.Dropout(p=dropout),
-            nn.Linear(feat_dim*2, feat_dim*2),      # 2. Non-linear mixing (256 -> 256)
+            nn.Linear(feat_dim * 2, feat_dim * 2),  # 2. Non-linear mixing (256 -> 256)
             nn.GELU(),
             nn.Dropout(p=dropout),
-            nn.Linear(feat_dim*2, d_model),  # 3. Final Squeeze (256 -> 3)
+            nn.Linear(feat_dim * 2, d_model),  # 3. Final Squeeze (256 -> 3)
             # nn.LayerNorm(d_model),
         )
 
@@ -239,6 +247,7 @@ class CoordMLPEncoderGaussian(nn.Module):
             raise ValueError(f"Expected coords with {self.in_dims} dimensions, got {coords.shape[-1]}")
         x = self.rff(coords)
         return self.net(x)
+
 
 # class TemporalConvEncoder(nn.Module):
 #     """Takes per-step embeddings [B, L, D] and learns temporal patterns
@@ -276,11 +285,12 @@ class CoordMLPEncoderGaussian(nn.Module):
 #         x = x.transpose(1, 2)  # [B, L, D]
 #         return x
 
+
 class TemporalConvEncoder(nn.Module):
     def __init__(
         self,
         emb_dim: int,
-        hidden_dim: int = 16, # Reduced from 2048 to 16 (Safe expansion)
+        hidden_dim: int = 16,  # Reduced from 2048 to 16 (Safe expansion)
         kernel_size: int = 3,
         num_layers: int = 2,
         use_dilation: bool = False,
@@ -293,31 +303,32 @@ class TemporalConvEncoder(nn.Module):
             out_ch = hidden_dim if i < num_layers - 1 else emb_dim
             dilation = 2**i if use_dilation else 1
             padding = ((kernel_size - 1) // 2) * dilation
-            
+
             layers.append(nn.Conv1d(in_ch, out_ch, kernel_size, padding=padding, dilation=dilation))
-            
+
             # CRITICAL FIX: Use GELU instead of ReLU to preserve negative coordinates
             if i < num_layers - 1:
-                layers.append(nn.GELU()) 
+                layers.append(nn.GELU())
                 layers.append(nn.Dropout(dropout))
-            
+
             in_ch = out_ch
-            
+
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: th.Tensor) -> th.Tensor:
         # x: [B, L, D]
-        x_in = x.transpose(1, 2) # [B, D, L]
-        
+        x_in = x.transpose(1, 2)  # [B, D, L]
+
         # Residual Connection: Output = Input + CNN_Feature
         # This ensures we enrich the token without destroying the original coord
         out = self.net(x_in)
-        
+
         # If dims match (which they do at the end), add residual
         if out.shape == x_in.shape:
             out = out + x_in
-            
-        return out.transpose(1, 2) # [B, L, D]
+
+        return out.transpose(1, 2)  # [B, L, D]
+
 
 class GridEncoderDropout3D(nn.Module):
     """3D CNN encoder over a small temporal window.
@@ -386,7 +397,9 @@ class GridEncoderDropout3D(nn.Module):
         x_fc_out = self.fc(x_flat)  # fc input is hidden_channels*4
         return x_fc_out.view(B, T_dim, -1)  # [B, T, out_dim]
 
+
 ## Behavior Encoder with SA tokenization and type embeddings
+
 
 class BehaviorEncoderCLSattnSATyped(nn.Module):
     """A Behavior Encoder using Decision Transformer-style tokenization and positional embeddings.
@@ -443,7 +456,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         self.coord_encoder = self.make_coord_mlp_encoder(
             kind=coord_state_kind,
             d_model=emb_dim,
-            d_hid=d_hid//32,
+            d_hid=d_hid // 32,
             in_dims=self.input_coord_dims,
             dropout=dropout,
             num_bands=emb_dim,  # keep your default width
@@ -454,7 +467,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
             learnable_proj=True,
         )
         self.temporal_encoder = TemporalConvEncoder(
-            emb_dim=emb_dim, hidden_dim=d_hid//4, kernel_size=7, num_layers=2, dropout=dropout, use_dilation=False
+            emb_dim=emb_dim, hidden_dim=d_hid // 4, kernel_size=7, num_layers=2, dropout=dropout, use_dilation=False
         )
 
         # Encoder for actions
@@ -464,7 +477,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         self.action_encoder_cont = self.make_coord_mlp_encoder(
             kind=coord_action_kind,
             d_model=emb_dim,
-            d_hid=d_hid//32,
+            d_hid=d_hid // 32,
             in_dims=num_actions,
             dropout=dropout,
             num_bands=emb_dim,
@@ -475,7 +488,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
             learnable_proj=True,
         )
         self.action_temporal_encoder_cont = TemporalConvEncoder(
-            emb_dim=emb_dim, hidden_dim=d_hid//4, kernel_size=7, num_layers=2, dropout=dropout, use_dilation=False
+            emb_dim=emb_dim, hidden_dim=d_hid // 4, kernel_size=7, num_layers=2, dropout=dropout, use_dilation=False
         )
 
         # Modality embeddings to differentiate states and actions
@@ -618,9 +631,10 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
 
         return normalized, attn_list_agg, _, _, cls_emb, cls_attn
 
-# Decoder  
+
+# Decoder
 class TrajectoryDecoder(nn.Module):
-    def __init__(self, emb_dim, state_dim, action_dim, max_len): # Removed spec_norm
+    def __init__(self, emb_dim, state_dim, action_dim, max_len):  # Removed spec_norm
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -628,11 +642,11 @@ class TrajectoryDecoder(nn.Module):
         self.out_features = max_len * (state_dim + action_dim)
 
         self.net = nn.Sequential(
-            nn.Linear(emb_dim, 1024), # Removed spec_norm logic
+            nn.Linear(emb_dim, 1024),  # Removed spec_norm logic
             nn.GELU(),
-            nn.Linear(1024, 1024), # Removed spec_norm logic
+            nn.Linear(1024, 1024),  # Removed spec_norm logic
             nn.GELU(),
-            nn.Linear(1024, self.out_features), # Removed spec_norm logic
+            nn.Linear(1024, self.out_features),  # Removed spec_norm logic
         )
 
     def forward(self, cls_embedding):
@@ -647,6 +661,7 @@ class TrajectoryDecoder(nn.Module):
         actions = recon[..., self.state_dim :]
         return states, actions
 
+
 # Policy-Level Set Encoder
 class PolicySetEncoder(nn.Module):
     """
@@ -654,69 +669,68 @@ class PolicySetEncoder(nn.Module):
     Takes a set of [N, D] embeddings (where D is usually small, e.g. 3),
     projects them to high-dim for processing, and outputs a single [1, D] embedding.
     """
+
     def __init__(
-        self, 
-        emb_dim: int,         # Input/Output dimension (e.g., 3)
-        hidden_dim: int,      # FFN dimension (e.g., 1024)
-        internal_dim: int = 3, # NEW: Transformer working dimension
-        n_layers: int = 2, 
-        n_heads: int = 4, 
-        dropout: float = 0.1
+        self,
+        emb_dim: int,  # Input/Output dimension (e.g., 3)
+        hidden_dim: int,  # FFN dimension (e.g., 1024)
+        internal_dim: int = 3,  # NEW: Transformer working dimension
+        n_layers: int = 2,
+        n_heads: int = 4,
+        dropout: float = 0.1,
     ):
         super().__init__()
         self.emb_dim = emb_dim
         self.internal_dim = internal_dim
-        
+
         # 1. Input Projection: Expand 3D input -> 64D working space
         self.input_proj = nn.Linear(emb_dim, internal_dim)
-        
+
         # 2. Learnable [CLS] token in High-Dim space
         self.cls_token = nn.Parameter(th.randn(1, 1, internal_dim))
-        
+
         # 3. Transformer Encoder (High Capacity)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=internal_dim, # Now 64
-            nhead=n_heads, 
-            dim_feedforward=hidden_dim, 
-            dropout=dropout, 
-            batch_first=True
+            d_model=internal_dim,  # Now 64
+            nhead=n_heads,
+            dim_feedforward=hidden_dim,
+            dropout=dropout,
+            batch_first=True,
         )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, 
-            num_layers=n_layers
-        )
-        
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+
         # 4. Output Projection: Squash 64D summary -> 3D Output
         self.output_proj = nn.Linear(internal_dim, emb_dim)
-    
+
     def forward(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
         """
         Input: x (th.Tensor): Set of trajectory embeddings. Shape: [N_trajs, emb_dim]
         """
         # Add batch dimension -> [1, N_trajs, emb_dim]
         x = x.unsqueeze(0)
-        
+
         # 1. Project inputs up to internal dimension
         # [1, N_trajs, emb_dim] -> [1, N_trajs, internal_dim]
         x_high = self.input_proj(x)
-        
+
         # 2. Prepend High-Dim CLS token
         cls_tokens = self.cls_token.expand(x_high.shape[0], -1, -1)
-        x_high = th.cat((cls_tokens, x_high), dim=1) # [1, 1+N_trajs, internal_dim]
-        
+        x_high = th.cat((cls_tokens, x_high), dim=1)  # [1, 1+N_trajs, internal_dim]
+
         # 3. Pass through transformer
-        all_tokens_high = self.transformer_encoder(x_high) # [1, 1+N_trajs, internal_dim]
-        
+        all_tokens_high = self.transformer_encoder(x_high)  # [1, 1+N_trajs, internal_dim]
+
         # 4. Project BACK to low dimension for output
-        all_tokens_low = self.output_proj(all_tokens_high) # [1, 1+N_trajs, emb_dim]
-        
+        all_tokens_low = self.output_proj(all_tokens_high)  # [1, 1+N_trajs, emb_dim]
+
         # Get the CLS token output (the learned policy representation)
-        cls_output = all_tokens_low[:, 0, :] # [1, emb_dim]
-        
+        cls_output = all_tokens_low[:, 0, :]  # [1, emb_dim]
+
         # Optional: Normalize if you want the policy embedding to stay on the sphere
         cls_output = F.normalize(cls_output, p=2, dim=1)
-        
+
         return cls_output, all_tokens_low
+
 
 # DeepInfoMax Loss and InfoNCE Loss
 class Discriminator(nn.Module):
@@ -728,6 +742,7 @@ class Discriminator(nn.Module):
 
     def forward(self, x: th.Tensor) -> th.Tensor:
         return self.net(x)
+
 
 class DeepInfoMaxLoss(nn.Module):
     """Deep InfoMax loss using a discriminator.
@@ -784,6 +799,7 @@ class DeepInfoMaxLoss(nn.Module):
 
         return masked_loss
 
+
 class InstanceLoss(nn.Module):
     def __init__(self, temperature, device):
         super(InstanceLoss, self).__init__()
@@ -828,12 +844,14 @@ class InstanceLoss(nn.Module):
 
         return loss
 
+
 class VarianceCovarianceLoss(nn.Module):
     """
     Forces embeddings to span the full D-dimensional space (Variance)
     and ensures dimensions are orthogonal (Covariance).
     Based on VICReg.
     """
+
     def __init__(self, std_coeff=25.0, cov_coeff=1.0):
         super().__init__()
         self.std_coeff = std_coeff
@@ -842,14 +860,14 @@ class VarianceCovarianceLoss(nn.Module):
     def forward(self, z):
         # z: [Batch, Dim]
         batch_size, num_features = z.shape
-        
+
         # 1. Centering
         z = z - z.mean(dim=0)
 
         # 2. Variance Loss: Force std of each dim to be close to 1.0
         # This prevents collapse (all points mapping to 0 or a single line)
         std_z = th.sqrt(z.var(dim=0) + 0.0001)
-        std_loss = th.mean(F.relu(1 - std_z)) 
+        std_loss = th.mean(F.relu(1 - std_z))
 
         # 3. Covariance Loss: Force off-diagonal covariances to 0
         # This prevents all 3 dimensions from being correlated (forming a line)
