@@ -36,5 +36,4 @@ def compute_zadu_metrics(raw_data, embeddings, k=2):
 
     zadu_instance = zadu.ZADU(spec, raw_data)
     result = zadu_instance.measure(embeddings)
-    print("ZADU metrics computed successfully")
     return result
