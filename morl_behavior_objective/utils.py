@@ -117,38 +117,23 @@ def get_returns(trajectory_path: str) -> npt.NDArray:
         policy_i = json.load(f)
 
     # get the returns for the policy
-    returns = np.array(policy_i["return"])
-
-    return returns
+    return np.array(policy_i["return"])
 
 
-def get_returns_json(trajectory_path: str) -> npt.NDArray:
-    """Extract objectives from a trajectory file in JSON format.
-
-    Args:
-        trajectory_path (str): Path to the trajectory data.
-    """
-    with open(trajectory_path) as f:
-        policy_i = json.load(f)
-
-    # get the returns for the policy
-    returns = np.array(policy_i["return"])
-
-    return returns
-
-
-def get_pareto_front(directory_path: str, pareto_size: int) -> npt.NDArray:
+def get_pareto_front(directory_path: str) -> npt.NDArray:
     """Extract Pareto front objectives from a trajectory file.
 
     Args:
-        trajectory_path (str): Path to the trajectory data.
+        directory_path (str): Path to the directory containing the trajectory data.
     """
     import os
 
     # get list with names of all files in the directory
     pareto_front = []
-    for i in range(pareto_size):
-        returns_i = get_returns_json(os.path.join(directory_path, f"policy_{i}.json"))
+    # counts number of files in the directory
+    num_files = len(os.listdir(directory_path))
+    for i in range(num_files):
+        returns_i = get_returns(os.path.join(directory_path, f"policy_{i}.json"))
         pareto_front.append(returns_i)
     pareto_front = np.array(pareto_front)
     return pareto_front
