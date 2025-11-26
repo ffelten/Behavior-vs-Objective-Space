@@ -143,10 +143,9 @@ LEFT_RIGHT_DST_MAP = np.array(
     ]
 )
 
-# Louvres DST: Vertical symmetry of LEFT_RIGHT_DST - twice as tall (22 rows)
 # Top half: LEFT_RIGHT_DST flipped vertically (left treasures at top)
 # Bottom half: LEFT_RIGHT_DST normal (right treasures at bottom)
-LOUVRES_DST_MAP = np.array(
+LOUVRE_DST_MAP = np.array(
     [
         # Inverted pyramid (top half - flipped LEFT_RIGHT_DST with left treasures)
         [
@@ -386,9 +385,9 @@ class DeepSeaTreasure(gym.Env, EzPickle):
                 if np.all(dst_map == LEFT_RIGHT_DST_MAP):
                     self.map_name = "left_right_dst"
                     self._pareto_front = LEFT_RIGHT_DST_FRONT
-        elif dst_map.shape[0] == LOUVRES_DST_MAP.shape[0] and dst_map.shape[1] == LOUVRES_DST_MAP.shape[1]:
-            if np.all(dst_map == LOUVRES_DST_MAP):
-                self.map_name = "louvres_dst"
+        elif dst_map.shape[0] == LOUVRE_DST_MAP.shape[0] and dst_map.shape[1] == LOUVRE_DST_MAP.shape[1]:
+            if np.all(dst_map == LOUVRE_DST_MAP):
+                self.map_name = "louvre_dst"
                 self._pareto_front = LEFT_RIGHT_DST_FRONT
         else:
             raise ValueError("Invalid map")
@@ -465,7 +464,7 @@ class DeepSeaTreasure(gym.Env, EzPickle):
                 if self._get_map_value(state) != -10:
                     return True
             return False
-        elif self.map_name in {"louvres_dst"}:
+        elif self.map_name in {"louvre_dst"}:
             if state[0] >= 0 and state[0] <= 21 and state[1] >= 0 and state[1] <= 20:
                 if self._get_map_value(state) != -10:
                     return True
@@ -551,7 +550,7 @@ class DeepSeaTreasure(gym.Env, EzPickle):
             self.current_state = np.array([0, 0], dtype=np.int32)
         elif self.map_name in {"mirrored", "left_right_dst"}:
             self.current_state = np.array([0, 10], dtype=np.int32)
-        elif self.map_name in {"louvres_dst"}:
+        elif self.map_name in {"louvre_dst"}:
             self.current_state = np.array([10, 10], dtype=np.int32)
         else:
             raise ValueError("Invalid map")

@@ -24,7 +24,7 @@ OPTIMAL_POLICIES_LEFT_RIGHT = {
 }
 
 
-OPTIMAL_POLICIES_LOUVRES_DST = {
+OPTIMAL_POLICIES_LOUVRE_DST = {
     "7_left": 4 * [LEFT] + 5 * [UP],  # 9 moves
     "6_right": 3 * [RIGHT] + 5 * [DOWN],  # 8 moves
     "25_left": 7 * [LEFT] + 8 * [UP],  # 15 moves
@@ -63,13 +63,13 @@ EPISODES_PER_POLICY = 50
 
 
 # env = mo_gym.make("left-right-dst-v0", render_mode=None)
-env = mo_gym.make("deep-sea-treasure-louvres-dst-v0", render_mode="human")
+env = mo_gym.make("deep-sea-treasure-louvre-dst-v0", render_mode="human")
 # env = mo_gym.make("deep-sea-treasure-smooth-v0", render_mode="human")
 # env = mo_gym.make("deep-sea-treasure-v0", render_mode="human", dst_map=CONCAVE_MAP)
 
 policy_disc_returns: dict[str, npt.NDArray] = {}
 
-for policy_name, policy in OPTIMAL_POLICIES_LOUVRES_DST.items():
+for policy_name, policy in OPTIMAL_POLICIES_LOUVRE_DST.items():
     env.reset()
     done = False
     disc_return = np.array([0.0, 0.0])
@@ -110,9 +110,9 @@ def collect_trajectory(policy: list[int]) -> tuple[list, list, npt.NDArray]:
     return states, actions, disc_return
 
 
-for i in range(len(OPTIMAL_POLICIES_LOUVRES_DST)):
+for i in range(len(OPTIMAL_POLICIES_LOUVRE_DST)):
     POLICY_ID = i
-    policy = list(OPTIMAL_POLICIES_LOUVRES_DST.values())[POLICY_ID]
+    policy = list(OPTIMAL_POLICIES_LOUVRE_DST.values())[POLICY_ID]
     states, actions, disc_return = collect_trajectory(policy)
     with open(f"trajectories/louvres_dst/policy_{POLICY_ID}.json", "w") as f:
         json.dump(
