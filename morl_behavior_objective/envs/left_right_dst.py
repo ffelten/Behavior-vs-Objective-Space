@@ -12,6 +12,7 @@ import morl_behavior_objective  # noqa: F401
 LEFT = 2
 RIGHT = 3
 DOWN = 1
+UP = 0
 
 OPTIMAL_POLICIES_LEFT_RIGHT = {
     "7_left": 4 * [LEFT] + 5 * [DOWN],  # 9 moves
@@ -22,6 +23,15 @@ OPTIMAL_POLICIES_LEFT_RIGHT = {
     "124_right": 9 * [RIGHT] + 10 * [DOWN],  # 19 moves
 }
 
+
+OPTIMAL_POLICIES_LOUVRES_DST = {
+    "7_left": 4 * [LEFT] + 5 * [UP],  # 9 moves
+    "6_right": 3 * [RIGHT] + 5 * [DOWN],  # 8 moves
+    "25_left": 7 * [LEFT] + 8 * [UP],  # 15 moves
+    "24_right": 6 * [RIGHT] + 8 * [DOWN],  # 14 moves
+    "120_left": 9 * [LEFT] + 9 * [UP],  # 18 moves
+    "124_right": 9 * [RIGHT] + 10 * [DOWN],  # 19 moves
+}
 
 OPTIMAL_POLICIES_DST_CONCAVE = {
     "1": 1 * [DOWN],  # 1 move
@@ -53,12 +63,13 @@ EPISODES_PER_POLICY = 50
 
 
 # env = mo_gym.make("left-right-dst-v0", render_mode=None)
-env = mo_gym.make("deep-sea-treasure-smooth-v0", render_mode="human")
+env = mo_gym.make("deep-sea-treasure-louvres-dst-v0", render_mode="human")
+# env = mo_gym.make("deep-sea-treasure-smooth-v0", render_mode="human")
 # env = mo_gym.make("deep-sea-treasure-v0", render_mode="human", dst_map=CONCAVE_MAP)
 
 policy_disc_returns: dict[str, npt.NDArray] = {}
 
-for policy_name, policy in OPTIMAL_POLICIES_SMOOTH.items():
+for policy_name, policy in OPTIMAL_POLICIES_LOUVRES_DST.items():
     env.reset()
     done = False
     disc_return = np.array([0.0, 0.0])
@@ -67,6 +78,7 @@ for policy_name, policy in OPTIMAL_POLICIES_SMOOTH.items():
     print("Executing policy: ", policy_name)
     while not done:
         action = policy[i]
+        print(f" Action: {action}")
         i += 1
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
@@ -98,11 +110,11 @@ def collect_trajectory(policy: list[int]) -> tuple[list, list, npt.NDArray]:
     return states, actions, disc_return
 
 
-for i in range(len(OPTIMAL_POLICIES_SMOOTH)):
+for i in range(len(OPTIMAL_POLICIES_LOUVRES_DST)):
     POLICY_ID = i
-    policy = list(OPTIMAL_POLICIES_SMOOTH.values())[POLICY_ID]
+    policy = list(OPTIMAL_POLICIES_LOUVRES_DST.values())[POLICY_ID]
     states, actions, disc_return = collect_trajectory(policy)
-    with open(f"trajectories/smooth/smooth_{POLICY_ID}.json", "w") as f:
+    with open(f"trajectories/louvres_dst/policy_{POLICY_ID}.json", "w") as f:
         json.dump(
             {"return": disc_return.tolist(), "trajectories": [[states, actions]] * EPISODES_PER_POLICY},
             f,

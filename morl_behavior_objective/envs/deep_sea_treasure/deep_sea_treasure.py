@@ -143,6 +143,183 @@ LEFT_RIGHT_DST_MAP = np.array(
     ]
 )
 
+# Louvres DST: Vertical symmetry of LEFT_RIGHT_DST - twice as tall (22 rows)
+# Top half: LEFT_RIGHT_DST flipped vertically (left treasures at top)
+# Bottom half: LEFT_RIGHT_DST normal (right treasures at bottom)
+LOUVRES_DST_MAP = np.array(
+    [
+        # Inverted pyramid (top half - flipped LEFT_RIGHT_DST with left treasures)
+        [
+            0,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            0,
+        ],  # Row 10 flipped (no right treasure)
+        [
+            0,
+            120.0,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            0,
+            0,
+        ],  # Row 9 flipped (left treasure 120.0)
+        [0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 0, 0],  # Row 8 flipped
+        [
+            0,
+            0,
+            0,
+            25.0,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            0,
+            0,
+            0,
+            0,
+        ],  # Row 7 flipped (left treasure 25.0, no right)
+        [0, 0, 0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 0, 0, 0, 0],  # Row 6 flipped
+        [0, 0, 0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 0, 0, 0, 0],  # Row 5 flipped
+        [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            7.0,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],  # Row 4 flipped (left treasure 7.0, no right)
+        [0, 0, 0, 0, 0, 0, 0, 0, -10, -10, -10, -10, 0, 0, 0, 0, 0, 0, 0, 0],  # Row 3 flipped
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, -10, -10, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # Row 2 flipped
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # Row 1 flipped
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # Row 0
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # Row 1
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, -10, -10, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # Row 2
+        [0, 0, 0, 0, 0, 0, 0, 0, -10, -10, -10, -10, 0, 0, 0, 0, 0, 0, 0, 0],  # Row 3
+        [0, 0, 0, 0, 0, 0, 0, -10, -10, -10, -10, -10, -10, 6.0, 0, 0, 0, 0, 0, 0],  # Row 4 (right treasure 6.0, no left)
+        [0, 0, 0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 0, 0, 0, 0],  # Row 5
+        [0, 0, 0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 0, 0, 0, 0],  # Row 6
+        [
+            0,
+            0,
+            0,
+            0,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            24.0,
+            0,
+            0,
+            0,
+        ],  # Row 7 (right treasure 24.0, no left)
+        [0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 0, 0],  # Row 8
+        [
+            0,
+            0,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            0,
+            0,
+        ],  # Row 9 (no left treasure)
+        [
+            0,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            -10,
+            124.0,
+        ],  # Row 10 (right treasure 124.0)
+    ]
+)
+
 
 class DeepSeaTreasure(gym.Env, EzPickle):
     """## Description
@@ -201,12 +378,18 @@ class DeepSeaTreasure(gym.Env, EzPickle):
                 self._pareto_front = SMOOTH_FRONT
             else:
                 raise ValueError("Invalid map")
-        elif np.all(dst_map == MIRRORED_MAP):
-            self.map_name = "mirrored"
-            self._pareto_front = CONCAVE_FRONT
-        elif np.all(dst_map == LEFT_RIGHT_DST_MAP):
-            self.map_name = "left_right_dst"
-            self._pareto_front = LEFT_RIGHT_DST_FRONT
+        elif dst_map.shape[0] == MIRRORED_MAP.shape[0] and dst_map.shape[1] == MIRRORED_MAP.shape[1]:
+            if np.all(dst_map == MIRRORED_MAP):
+                self.map_name = "mirrored"
+                self._pareto_front = CONCAVE_FRONT
+            elif dst_map.shape[0] == LEFT_RIGHT_DST_MAP.shape[0] and dst_map.shape[1] == LEFT_RIGHT_DST_MAP.shape[1]:
+                if np.all(dst_map == LEFT_RIGHT_DST_MAP):
+                    self.map_name = "left_right_dst"
+                    self._pareto_front = LEFT_RIGHT_DST_FRONT
+        elif dst_map.shape[0] == LOUVRES_DST_MAP.shape[0] and dst_map.shape[1] == LOUVRES_DST_MAP.shape[1]:
+            if np.all(dst_map == LOUVRES_DST_MAP):
+                self.map_name = "louvres_dst"
+                self._pareto_front = LEFT_RIGHT_DST_FRONT
         else:
             raise ValueError("Invalid map")
 
@@ -279,6 +462,11 @@ class DeepSeaTreasure(gym.Env, EzPickle):
     def _is_valid_state(self, state):
         if self.map_name in {"mirrored", "left_right_dst"}:
             if state[0] >= 0 and state[0] <= 10 and state[1] >= 0 and state[1] <= 19:
+                if self._get_map_value(state) != -10:
+                    return True
+            return False
+        elif self.map_name in {"louvres_dst"}:
+            if state[0] >= 0 and state[0] <= 21 and state[1] >= 0 and state[1] <= 20:
                 if self._get_map_value(state) != -10:
                     return True
             return False
@@ -363,6 +551,8 @@ class DeepSeaTreasure(gym.Env, EzPickle):
             self.current_state = np.array([0, 0], dtype=np.int32)
         elif self.map_name in {"mirrored", "left_right_dst"}:
             self.current_state = np.array([0, 10], dtype=np.int32)
+        elif self.map_name in {"louvres_dst"}:
+            self.current_state = np.array([10, 10], dtype=np.int32)
         else:
             raise ValueError("Invalid map")
         self.step_count = 0.0
