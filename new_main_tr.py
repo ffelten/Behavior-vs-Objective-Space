@@ -157,11 +157,16 @@ def main():
         gaussian_m_action = 32 #not really used for discrete actions
         gaussian_sigma_state = 0.1
         gaussian_sigma_action = 0.1 #not really used for discrete actions
+    elif env_code == "MHW":
+        gaussian_m_state = 128
+        gaussian_m_action = 32
+        gaussian_sigma_state = 0.1
+        gaussian_sigma_action = 0.1
     else:
         gaussian_m_state = 128
         gaussian_m_action = 32
-        gaussian_sigma_state = 5
-        gaussian_sigma_action = 5
+        gaussian_sigma_state = 0.1
+        gaussian_sigma_action = 0.1
 
     model_dir = args.model_dir + f"{env_code}/"
     args.model_dir = model_dir
