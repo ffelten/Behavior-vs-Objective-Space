@@ -584,7 +584,8 @@ def train_epoch(
     dim_weight,
     segment_weight=0.0,
     env_id=None,
-    vc_weight=0.01,
+    vc_weight=0.05,
+    cls_norm=True
 ):
     encoder.train()
     decoder.train()
@@ -594,12 +595,26 @@ def train_epoch(
     for states, actions, masks, _, returns in loader:
         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
 
+        if actions[0][0].shape[0] == 1:
+            discrete_actions = True
+        else:
+            discrete_actions = False
+
         # --- Two stochastic forward passes for contrastive learning ---
-        all_tokens1, _, _, _, cls_emb1, _ = encoder(states, actions, src_key_padding_mask=masks)
-        all_tokens2, _, _, _, cls_emb2, _ = encoder(states, actions, src_key_padding_mask=masks)
+        all_tokens1, _, _, _, cls_emb1_raw, _ = encoder(states, actions, src_key_padding_mask=masks)
+        all_tokens2, _, _, _, cls_emb2_raw, _ = encoder(states, actions, src_key_padding_mask=masks)
+        if cls_norm:
+            cls_emb1 = cls_emb1_raw
+            cls_emb2 = cls_emb2_raw
+        else:
+            cls_emb1 = F.normalize(cls_emb1_raw, dim=1)
+            cls_emb2 = F.normalize(cls_emb2_raw, dim=1)
 
         # Decoder can use either embedding, let's use the first one
-        states_rec, actions_rec = decoder(cls_emb1)
+        if cls_norm:
+            states_rec, actions_rec = decoder(cls_emb1)
+        else:
+            states_rec, actions_rec = decoder(cls_emb1_raw)
 
         # --- IMPROVED: Mask-Aware Reconstruction Loss ---
         # Calculate valid lengths for each trajectory in the batch
@@ -618,7 +633,14 @@ def train_epoch(
 
             # Loss for this trajectory (only over valid steps)
             rec_state_loss += (states_rec[b, :valid_len] - states[b, :valid_len]).pow(2).sum()
-            rec_action_loss += (actions_rec[b, :valid_len] - actions[b, :valid_len]).pow(2).sum()
+            if discrete_actions:
+                # For discrete actions, use one-hot encoding for reconstruction loss
+                act_logits = actions_rec[b, :valid_len]
+                act_targets = actions[b, :valid_len].long().squeeze(-1)
+                rec_action_loss += F.cross_entropy(act_logits, act_targets, reduction='sum')
+                # print(f"Batch {b}, rec_action_loss: {rec_action_loss}")
+            else:
+                rec_action_loss += (actions_rec[b, :valid_len] - actions[b, :valid_len]).pow(2).sum()
             total_valid_steps += valid_len
 
         # Average over all valid steps in the batch
@@ -644,7 +666,7 @@ def train_epoch(
             current_L_max = min(L_max, T - 1)
             L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
 
-        vc_reg = vc_loss_fn(cls_emb1) + vc_loss_fn(cls_emb2)
+        vc_reg = (vc_loss_fn(cls_emb1_raw) + vc_loss_fn(cls_emb2_raw)) / 2.0
 
         # --- Total Weighted Loss ---
         loss = (
@@ -659,6 +681,7 @@ def train_epoch(
         loss.backward()
         th.nn.utils.clip_grad_norm_(encoder.parameters(), 1.0)
         th.nn.utils.clip_grad_norm_(decoder.parameters(), 1.0)
+        th.nn.utils.clip_grad_norm_(dim_loss_fn.parameters(), 1.0)
         optim.step()
         total_loss += loss.item()
 
@@ -1176,6 +1199,12 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
         env_id = "left-right-dst-v0"
         base_trajectories_path = f"trajectories/{name_env}/"
         is_seeded_env = False
+    elif args.DeepSeaTreasureLouvre:
+        name_env = "louvre_dst"
+        num_policies = 10
+        env_id = "louvre_dst"
+        base_trajectories_path = f"trajectories/{name_env}/"
+        is_seeded_env = False
     elif args.MOHalfCheetah:
         name_env = "mo-halfcheetah-v5"
         num_policies = (
@@ -1255,7 +1284,11 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
 
         for states, actions in loaded_trajectories:
             obs = np.array(list(states) + [states[-1]], dtype=np.float32)
-            acts = np.array(actions, dtype=np.float32)
+            # acts = np.array(actions, dtype=np.float32)
+            if is_seeded_env:
+                acts = np.array(actions, dtype=np.float32)
+            else:
+                acts = np.array(actions)
             if acts.ndim == 1:
                 acts = acts.reshape(-1, 1)
             traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)

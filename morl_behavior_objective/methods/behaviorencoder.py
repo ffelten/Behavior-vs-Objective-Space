@@ -456,7 +456,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         self.coord_encoder = self.make_coord_mlp_encoder(
             kind=coord_state_kind,
             d_model=emb_dim,
-            d_hid=d_hid // 32,
+            d_hid=d_hid,
             in_dims=self.input_coord_dims,
             dropout=dropout,
             num_bands=emb_dim,  # keep your default width
@@ -477,7 +477,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         self.action_encoder_cont = self.make_coord_mlp_encoder(
             kind=coord_action_kind,
             d_model=emb_dim,
-            d_hid=d_hid // 32,
+            d_hid=d_hid,
             in_dims=num_actions,
             dropout=dropout,
             num_bands=emb_dim,
@@ -488,6 +488,9 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
             learnable_proj=True,
         )
         self.action_temporal_encoder_cont = TemporalConvEncoder(
+            emb_dim=emb_dim, hidden_dim=d_hid // 4, kernel_size=7, num_layers=2, dropout=dropout, use_dilation=False
+        )
+        self.action_temporal_encoder_discr = TemporalConvEncoder(
             emb_dim=emb_dim, hidden_dim=d_hid // 4, kernel_size=7, num_layers=2, dropout=dropout, use_dilation=False
         )
 
@@ -562,7 +565,11 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         self._dropout_p = p
 
     def init_weights(self) -> None:
-        for p in self.parameters():
+        for name, p in self.named_parameters():
+            # Skip the Fourier (RFF) weights!
+            if "rff.W" in name or "ff.log_scale" in name:
+                continue
+            
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
@@ -579,10 +586,11 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
             raise ValueError(f"Unsupported state dimension: {states.dim()}")
         state_emb = self.input_proj(state_emb)
 
-        # 2. Encode actions
-        if actions[0][0].dtype == th.int64:
+        if actions[0][0].shape[0] == 1:
             # Discrete actions
-            action_emb = self.action_encoder_discr(actions)
+            action_emb = self.action_encoder_discr(actions.long())
+            action_emb = action_emb.view(B, T, self.d_model)
+            action_emb = self.action_temporal_encoder_cont(action_emb)
         else:
             # Continuous actions
             flat_act = actions.view(B * T, -1)

@@ -53,6 +53,9 @@ def main():
     arg_env.add_argument(
         "-DSTLR", "--DeepSeaTreasureLeftRight", help="DeepSeaTreasureLeftRight environment", action="store_true"
     )
+    arg_env.add_argument(
+        "-DSTL", "--DeepSeaTreasureLouvre", help="DeepSeaTreasureLouvre environment", action="store_true"
+    )  # no exp
     arg_env.add_argument("-MHC", "--MOHalfCheetah", help="MO-HalfCheetah environment", action="store_true")
     arg_env.add_argument("-MHW", "--MOHighway", help="MO-Highway environment", action="store_true")
     arg_env.add_argument("-MHo2", "--MOHopper2obj", help="MO-Hopper environment with 2 objectives", action="store_true")
@@ -89,7 +92,7 @@ def main():
     arg_hyp.add_argument("--nlayers", type=int, default=2)
     arg_hyp.add_argument("--d_hid", type=int, default=128)  # dsts 64 dtslr 32
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
-    arg_hyp.add_argument("--recon_weight", type=float, default=0.1)
+    arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
     arg_hyp.add_argument("--segment_weight", type=float, default=0.0)
@@ -112,9 +115,10 @@ def main():
     arg_set.add_argument("--set_dim_weight", type=float, default=1.0, help="DIM loss weight for set encoder")
     arg_set.add_argument("--set_n_layers", type=int, default=2, help="Number of layers for set encoder transformer")
     arg_set.add_argument("--set_n_heads", type=int, default=1, help="Number of heads for set encoder transformer")
-    arg_set.add_argument("--set_d_hid", type=int, default=1024, help="Hidden dimension for set encoder transformer")
+    arg_set.add_argument("--set_d_hid", type=int, default=128, help="Hidden dimension for set encoder transformer")
 
     args = parser.parse_args()
+    normalize_cls = True  # Whether to normalize the CLS token embedding
 
     # --- Seeding ---
     th.manual_seed(args.seed)
@@ -143,14 +147,16 @@ def main():
         if args.MOHopper
         else "RG"
         if args.ResourceGathering
+        else "DSTL"
+        if args.DeepSeaTreasureLouvre
         else "UNK"
     )
 
-    if env_code == "DSTC" or env_code == "DSTS" or env_code == "DSTLR":
-        gaussian_m_state = 64
-        gaussian_m_action = 32
-        gaussian_sigma_state = 10
-        gaussian_sigma_action = 10
+    if env_code == "DSTC" or env_code == "DSTS" or env_code == "DSTLR" or env_code == "DSTL":
+        gaussian_m_state = 18 #18 stable
+        gaussian_m_action = 32 #not really used for discrete actions
+        gaussian_sigma_state = 0.1
+        gaussian_sigma_action = 0.1 #not really used for discrete actions
     else:
         gaussian_m_state = 128
         gaussian_m_action = 32
@@ -176,6 +182,7 @@ def main():
 
     all_states_raw = [t.obs for t in trajectories]
     all_actions_raw = [t.acts for t in trajectories]
+    is_discrete_acts = True if (trajectories[0].acts[0].shape[0] == 1) else False
 
     # --- Normalization ---
     if args.state_scaler != "none":
@@ -185,7 +192,7 @@ def main():
     else:
         all_states_norm = all_states_raw
 
-    if args.action_scaler != "none" and is_cont_actions(all_actions_raw):
+    if args.action_scaler != "none" and is_cont_actions(all_actions_raw) and not is_discrete_acts:
         sa = build_scaler(args.action_scaler)
         sa = fit_on_flat(all_actions_raw, sa, fit_mode=args.scaler_fit)
         all_actions_norm = apply_per_traj(all_actions_raw, sa)
@@ -222,6 +229,21 @@ def main():
     print("Input action dimensions:", trajectories[-1].acts.shape[1])
     num_actions = trajectories[0].acts.shape[1] if trajectories[0].acts.ndim > 1 else 1
 
+    if is_discrete_acts:
+        # Calculate Vocabulary Size (Max ID + 1)
+        # We flatten all trajectories to find the global max action ID
+        all_acts_flat = np.concatenate([t.acts.flatten() for t in trajectories])
+        vocab_size = int(all_acts_flat.max() + 1)
+        
+        num_actions = vocab_size      # For Encoder nn.Embedding
+        decoder_action_dim = vocab_size # For Decoder Output (Logits)
+        print(f"Discrete Env detected. Vocab Size: {vocab_size}")
+    else:
+        # Continuous Case
+        num_actions = trajectories[0].acts.shape[1] if trajectories[0].acts.ndim > 1 else 1
+        decoder_action_dim = num_actions
+        print(f"Continuous Env detected. Action Dim: {num_actions}")
+
     encoder = BehaviorEncoderCLSattnSATyped(
         input_channels=input_coord_dims,
         cnn_output_dim=args.emb_dim,
@@ -238,9 +260,10 @@ def main():
         gaussian_m_action=gaussian_m_action,
         gaussian_sigma_state=gaussian_sigma_state,
         gaussian_sigma_action=gaussian_sigma_action,
+        normalize_output_embeddings=normalize_cls,
     ).to(device)
 
-    decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, num_actions, max_len).to(device)  # Removed spec_norm
+    decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, decoder_action_dim, max_len).to(device)  # Removed spec_norm
     info_loss_fn = InstanceLoss(args.temperature, device=device)
     dim_loss_fn = DeepInfoMaxLoss(args.emb_dim).to(device)
     vc_loss_fn = VarianceCovarianceLoss(std_coeff=25.0, cov_coeff=1.0).to(device)
@@ -261,19 +284,20 @@ def main():
         pbar = tqdm(range(args.epochs))
         for epoch in pbar:
             loss = train_epoch(
-                encoder,
-                decoder,
-                loader,
-                optim,
-                device,
-                info_loss_fn,
-                dim_loss_fn,
-                vc_loss_fn,
-                args.recon_weight,
-                args.info_weight,
-                args.dim_weight,
-                args.segment_weight,
-                env_id,
+                encoder=encoder,
+                decoder=decoder,
+                loader=loader,
+                optim=optim,
+                device=device,
+                info_loss_fn=info_loss_fn,
+                dim_weight=args.dim_weight,
+                vc_loss_fn=vc_loss_fn,
+                recon_weight=args.recon_weight,
+                info_weight=args.info_weight,
+                dim_loss_fn=dim_loss_fn,
+                segment_weight=args.segment_weight,
+                env_id=env_id,
+                cls_norm=normalize_cls,
             )
             pbar.set_description(f"Epoch {epoch + 1}/{args.epochs} | Loss: {loss:.4f}")
         os.makedirs(args.model_dir, exist_ok=True)
@@ -455,6 +479,50 @@ def main():
             save_policy_latents_to_json(
                 learned_policy_latents, trajectories, true_labels, obj_feats_per_traj, json_learned_path
             )
+
+    # -----------------------------------------------------------------
+    # --- Compute ZADU Metrics: Returns vs Embeddings ---
+    # -----------------------------------------------------------------
+    print("\n" + "-" * 30)
+    print("--- Computing ZADU Metrics: Returns vs Embeddings ---")
+    
+    from morl_behavior_objective.analysis.metrics_clean import compute_zadu_metrics
+    
+    # Get policy-level data in consistent order
+    pids_ordered = sorted(mean_policy_latents.keys())
+    
+    # Build returns matrix (one return vector per policy)
+    returns_matrix = np.array([obj_feats_per_policy[pid] for pid in pids_ordered])
+    mean_emb_matrix = np.array([mean_policy_latents[pid] for pid in pids_ordered])
+    
+    n_policies = len(pids_ordered)
+    k_zadu = min(2, n_policies - 1)  # ZADU k parameter, at least 1 neighbor
+    
+    if n_policies >= 3:
+        # Compute metrics: Returns -> Mean Embeddings
+        zadu_results = compute_zadu_metrics(returns_matrix, mean_emb_matrix, k=k_zadu)
+        
+        print(f"ZADU Metrics (k={k_zadu}):")
+        print(f"  Returns vs Mean Embeddings:")
+        print(f"    Trustworthiness: {zadu_results[0]['trustworthiness']:.4f}")
+        print(f"    Continuity:      {zadu_results[0]['continuity']:.4f}")
+        print(f"    MRRE (false):    {zadu_results[1]['mrre_false']:.4f}")
+        print(f"    MRRE (missing):  {zadu_results[1]['mrre_missing']:.4f}")
+        
+        # If set encoder was used, also compare returns vs learned embeddings
+        if args.use_set_encoder and learned_policy_latents:
+            learned_emb_matrix = np.array([learned_policy_latents[pid] for pid in pids_ordered])
+            zadu_results_learned = compute_zadu_metrics(returns_matrix, learned_emb_matrix, k=k_zadu)
+            
+            print(f"  Returns vs Learned Embeddings:")
+            print(f"    Trustworthiness: {zadu_results_learned[0]['trustworthiness']:.4f}")
+            print(f"    Continuity:      {zadu_results_learned[0]['continuity']:.4f}")
+            print(f"    MRRE (false):    {zadu_results_learned[1]['mrre_false']:.4f}")
+            print(f"    MRRE (missing):  {zadu_results_learned[1]['mrre_missing']:.4f}")
+    else:
+        print(f"Not enough policies ({n_policies}) to compute ZADU metrics. Need at least 3.")
+    
+    print("--- ZADU Metrics Complete ---")   
 
     # -----------------------------------------------------------------
     # --- Compare Mean vs. Learned Embeddings ---
