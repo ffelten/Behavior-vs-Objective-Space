@@ -1208,7 +1208,7 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
     elif args.MOHalfCheetah:
         name_env = "mo-halfcheetah-v5"
         num_policies = (
-            80 if args.seed == 0 else 99 if args.seed == 1 else 92 if args.seed == 2 else 103 if args.seed == 3 else 93
+            80 #if args.seed == 0 else 99 if args.seed == 1 else 92 if args.seed == 2 else 103 if args.seed == 3 else 93
         )
         env_id = "mo-halfcheetah-v5"
         base_trajectories_path = f"trajectories/morld/{name_env}/"
@@ -1216,7 +1216,7 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
     elif args.MOHighway:
         name_env = "mo-highway-fast-v0"
         num_policies = (
-            41 if args.seed == 0 else 41 if args.seed == 1 else 40 if args.seed == 2 else 43 if args.seed == 3 else 51
+            41 #if args.seed == 0 else 41 if args.seed == 1 else 40 if args.seed == 2 else 43 if args.seed == 3 else 51
         )
         env_id = "mo-highway-fast-v0"
         base_trajectories_path = f"trajectories/morld/{name_env}/"  # Highway's base path
@@ -1224,7 +1224,7 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
     elif args.MOHopper:
         name_env = "mo-hopper-v5"
         num_policies = (
-            160 if args.seed == 0 else 157 if args.seed == 1 else 144 if args.seed == 2 else 182 if args.seed == 3 else 203
+            160 #if args.seed == 0 else 157 if args.seed == 1 else 144 if args.seed == 2 else 182 if args.seed == 3 else 203
         )
         env_id = "mo-hopper-v5"
         base_trajectories_path = f"trajectories/morld/{name_env}/"
@@ -1232,7 +1232,7 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
     elif args.MOHopper2obj:
         name_env = "mo-hopper-2obj-v5"
         num_policies = (
-            35 if args.seed == 0 else 26 if args.seed == 1 else 32 if args.seed == 2 else 24 if args.seed == 3 else 25
+            35 #if args.seed == 0 else 26 if args.seed == 1 else 32 if args.seed == 2 else 24 if args.seed == 3 else 25
         )
         env_id = "mo-hopper-2obj-v5"
         base_trajectories_path = f"trajectories/morld/{name_env}/"
@@ -1250,7 +1250,8 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
 
     # Path to load trajectories from (e.g., .../seed0/)
     if is_seeded_env:
-        trajectories_directory_path = os.path.join(base_trajectories_path, f"seed{args.seed}")
+        # trajectories_directory_path = os.path.join(base_trajectories_path, f"seed{args.seed}")
+        trajectories_directory_path = os.path.join(base_trajectories_path, f"seed0") # using only seed0 trajectories we can evaluate policies over different transformers
     else:
         trajectories_directory_path = base_trajectories_path
 
