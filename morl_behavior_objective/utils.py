@@ -51,8 +51,9 @@ def create_ground_truth_dst(trajectory_path: str) -> npt.NDArray:
     n_left = actions.count(2)
     n_right = actions.count(3)
     n_down = actions.count(1)
+    n_up = actions.count(0)
 
-    emb_gt = np.array([n_right - n_left, n_down])
+    emb_gt = np.array([n_right - n_left, n_down - n_up])
 
     return emb_gt
 

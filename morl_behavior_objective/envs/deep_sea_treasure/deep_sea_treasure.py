@@ -145,7 +145,7 @@ LEFT_RIGHT_DST_MAP = np.array(
 
 # Top half: LEFT_RIGHT_DST flipped vertically (left treasures at top)
 # Bottom half: LEFT_RIGHT_DST normal (right treasures at bottom)
-LOUVRES_DST_MAP = np.array(
+LOUVRE_DST_MAP = np.array(
     [
         # Inverted pyramid (top half - flipped LEFT_RIGHT_DST with left treasures)
         [
