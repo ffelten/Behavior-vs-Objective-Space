@@ -75,7 +75,8 @@ def compute_lipschitz_constants_3d(
     emb_points = embeddings.copy()
     n_points = len(pf_points)
 
-    seq_idx = [0]  # start with first point
+    lowest_obj_idx = np.argmin(pf_points[:, 0])
+    seq_idx = [lowest_obj_idx]  # start with point with lowest obj value in first dimension
     remaining_idx = list(range(1, n_points))
 
     while remaining_idx:
