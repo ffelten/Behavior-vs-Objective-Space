@@ -4,7 +4,7 @@ from morl_behavior_objective.utils import get_pareto_front
 from pathlib import Path
 
 
-RENDER="highway" #"hopper" #"cheetah"
+RENDER="cheetah" #"hopper" #"cheetah"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 seed = 0
 
