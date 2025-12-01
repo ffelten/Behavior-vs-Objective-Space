@@ -11,7 +11,7 @@ import numpy.typing as npt
 
 params = {
     "algo": "morld",
-    "env_id": "mo-hopper-2obj-v5",  # "mo-highway-fast-v0",  # "mo-halfcheetah-v5",
+    "env_id": "mo-highway-fast-v0",  # "mo-highway-fast-v0",  # "mo-halfcheetah-v5","mo-hopper-2obj-v5""
     "num_timesteps": 1_000_000,
     "gamma": 0.99,
     "ref_point": [-100, -100],  # [-1, -1, -40],  # [-100, -100],
@@ -20,7 +20,7 @@ params = {
     "init_hyperparams": {
         "scalarization_method": "ws",
         "evaluation_mode": "ser",
-        "policy_name": "MOSAC",  # "MOSACDiscrete",  # "MOSAC",
+        "policy_name": "MOSACDiscrete",  # "MOSACDiscrete",  # "MOSAC",
         "shared_buffer": False,
         "weight_adaptation_method": None,
         "exchange_every": 10_000,
@@ -272,6 +272,12 @@ def visualize_pareto_front(
     return fig
 
 
+import os
+import numpy as np
+import imageio
+import mo_gymnasium as mo_gym
+from gymnasium.wrappers import TimeLimit, FlattenObservation
+
 def render_policy(
     env_id: str, check_point: str, policy_id: int, n_episodes: int, save_dic=None, fps=30, base_path: str = "."
 ) -> None:
@@ -311,8 +317,8 @@ def render_policy(
         raise RuntimeError("MORLD pareto archive is empty after load().")
 
     pol = agent.archive.individuals[policy_id]
-    pweights = getattr(pol, "weights", None)
-    print(f"[MORLD] {env_id}: rendering policy {policy_id} with weights {pweights}")
+    returns = getattr(pol, "returns", None)
+    print(f"[MORLD] {env_id}: rendering policy {policy_id} with weights {returns}")
     for episode in range(n_episodes):
         frames = []
         obs, _ = env.reset()
@@ -332,14 +338,14 @@ def render_policy(
             obs, reward, terminated, truncated, info = env.step(action)
 
         if save_dic is not None:
-            imageio.mimsave(os.path.join(save_dic, f"{env_id}_policy_{policy_id}_ep_{episode}.gif"), frames, fps=fps)
+            path = os.path.join(save_dic, f"{env_id}_policy_{policy_id}_ep_{episode}.mp4") 
+            imageio.mimsave(path, frames, fps=fps, codec='libx264')   
     env.close()
 
 
+
+
 if __name__ == "__main__":
-    # pf= get_pareto_front("trajectories/morld/mo-highway-fast-v0_100steps_test", pareto_size=41)
-    # print(pf)
-    # visualize_pareto_front(pf, save_html="pareto_front.html")
     render_policy(
         env_id="mo-halfcheetah-v5",
         check_point="MORL_policies/morld_cheetah_v5/seed0.tar",
