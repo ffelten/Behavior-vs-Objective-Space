@@ -7,10 +7,12 @@ import torch as th  # type: ignore[import]
 from tqdm import tqdm  # type: ignore[import]
 from sklearn.metrics import pairwise_distances  # type: ignore[import]
 from sklearn.manifold import trustworthiness  # type: ignore[import]
-
+import matplotlib.pyplot as plt  # type: ignore[import]
 from imitation.data.types import Trajectory  # type: ignore[import]
 from morl_behavior_objective.methods.behaviorencoder import (
     BehaviorEncoderCLSattnSATyped,
+    BehaviorEncoderMLPBaseline,
+    BehaviorEncoderMLPDouble,
     DeepInfoMaxLoss,
     InstanceLoss,
     TrajectoryDecoder,
@@ -40,6 +42,133 @@ import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
+
+from sklearn.metrics import pairwise_distances
+from scipy.stats import spearmanr
+
+
+def check_for_leakage(encoder, loader, device):
+    """
+    Verify that the encoder doesn't have access to policy/return information.
+    
+    If there's NO leakage:
+    - Shuffled policy assignments should give RANDOM structure
+    - The actual structure should come from (s,a) patterns only
+    """
+    encoder.eval()
+    
+    all_embeddings = []
+    all_policies = []
+    all_returns = []
+    
+    with th.no_grad():
+        for states, actions, masks, labels, returns in loader:
+            states = states.to(device)
+            actions = actions.to(device)
+            masks = masks.to(device)
+            
+            _, _, _, _, cls_emb, _ = encoder(states, actions, src_key_padding_mask=masks)
+            all_embeddings.append(cls_emb.cpu().numpy())
+            all_policies.extend(labels.numpy())
+            all_returns.append(returns.numpy())
+    
+    embeddings = np.vstack(all_embeddings)
+    policies = np.array(all_policies)
+    returns = np.vstack(all_returns)
+    
+    print("\n" + "=" * 70)
+    print("LEAKAGE CHECK")
+    print("=" * 70)
+    
+    # 1. Check: Does embedding distance correlate with policy distance?
+    unique_pids = np.unique(policies)
+    policy_emb = np.array([embeddings[policies == p].mean(0) for p in unique_pids])
+    policy_ret = np.array([returns[policies == p][0] for p in unique_pids])
+    
+    D_emb = pairwise_distances(policy_emb)
+    D_ret = pairwise_distances(policy_ret)
+    
+    triu = np.triu_indices(len(unique_pids), k=1)
+    real_corr, _ = spearmanr(D_emb[triu], D_ret[triu])
+    
+    print(f"\n1. REAL DATA")
+    print(f"   Embedding-Return correlation: {real_corr:.4f}")
+    
+    # 2. Shuffle test: Randomly reassign policy labels
+    # If structure comes from (s,a) patterns, shuffling labels shouldn't change embeddings
+    # but SHOULD destroy the correlation with returns
+    
+    shuffled_policies = policies.copy()
+    np.random.shuffle(shuffled_policies)
+    
+    shuffled_policy_emb = np.array([embeddings[shuffled_policies == p].mean(0) for p in unique_pids])
+    shuffled_policy_ret = np.array([returns[shuffled_policies == p][0] for p in unique_pids])
+    
+    D_shuf_emb = pairwise_distances(shuffled_policy_emb)
+    D_shuf_ret = pairwise_distances(shuffled_policy_ret)
+    
+    shuf_corr, _ = spearmanr(D_shuf_emb[triu], D_shuf_ret[triu])
+    
+    print(f"\n2. SHUFFLED LABELS (control)")
+    print(f"   Embedding-Return correlation: {shuf_corr:.4f}")
+    
+    # 3. Interpretation
+    print(f"\n3. INTERPRETATION")
+    if abs(real_corr) > 0.3 and abs(shuf_corr) < 0.2:  # More lenient threshold
+        print("   ✅ NO LEAKAGE DETECTED")
+        print("   - Real correlation is significant")
+        print("   - Shuffled correlation is near zero")
+        print("   - Structure comes from (s,a) patterns, not labels")
+    elif abs(real_corr) > 0.3 and abs(real_corr - shuf_corr) > 0.4:
+        # Even if shuffled is slightly above threshold, if the DIFFERENCE is large, it's fine
+        print("   ✅ NO LEAKAGE DETECTED")
+        print("   - Real correlation is much higher than shuffled")
+        print(f"   - Difference: {abs(real_corr - shuf_corr):.4f}")
+    elif abs(real_corr - shuf_corr) < 0.1:
+        print("   ⚠️ POSSIBLE ISSUE")
+        print("   - Correlation similar with real and shuffled labels")
+    else:
+        print("   ❓ UNCLEAR - investigate further")
+        print(f"   - Real: {real_corr:.4f}, Shuffled: {shuf_corr:.4f}")
+        print(f"   - Difference: {abs(real_corr - shuf_corr):.4f}")
+        
+    
+    # 4. Additional check: Intra-policy consistency
+    # If embeddings capture policy structure, trajectories from same policy should cluster
+    intra_dists = []
+    inter_dists = []
+    
+    for pid in unique_pids:
+        same_policy = embeddings[policies == pid]
+        diff_policy = embeddings[policies != pid]
+        
+        if len(same_policy) > 1:
+            intra = pairwise_distances(same_policy)
+            intra_dists.extend(intra[np.triu_indices(len(same_policy), k=1)])
+        
+        if len(same_policy) > 0 and len(diff_policy) > 0:
+            inter = pairwise_distances(same_policy, diff_policy)
+            inter_dists.extend(inter.flatten())
+    
+    print(f"\n4. CLUSTERING QUALITY")
+    print(f"   Intra-policy distance (mean): {np.mean(intra_dists):.4f}")
+    print(f"   Inter-policy distance (mean): {np.mean(inter_dists):.4f}")
+    print(f"   Ratio (lower = better clustering): {np.mean(intra_dists) / np.mean(inter_dists):.4f}")
+    
+    if np.mean(intra_dists) < np.mean(inter_dists):
+        print("   ✅ Trajectories from same policy cluster together")
+        print("   → Structure is real and comes from behavioral patterns")
+    else:
+        print("   ⚠️ No clear clustering by policy")
+    
+    print("=" * 70)
+    
+    return {
+        'real_corr': real_corr,
+        'shuffled_corr': shuf_corr,
+        'intra_dist': np.mean(intra_dists),
+        'inter_dist': np.mean(inter_dists),
+    }
 
 # ---------- Main Execution Block ----------
 def main():
@@ -79,6 +208,9 @@ def main():
     arg_viz.add_argument(
         "--with_lines", action="store_true", help="Whether to connect policy embeddings with lines in the visualization"
     )
+
+    arg_method = parser.add_argument_group("Method Selection")
+    arg_method.add_argument('--use_mlp_baseline', action='store_true', help='Use MLP baseline instead of Transformer-based encoder')
 
     arg_hyp = parser.add_argument_group("Training Hyperparameters")
     arg_hyp.add_argument(
@@ -249,24 +381,44 @@ def main():
         decoder_action_dim = num_actions
         print(f"Continuous Env detected. Action Dim: {num_actions}")
 
-    encoder = BehaviorEncoderCLSattnSATyped(
-        input_channels=input_coord_dims,
-        cnn_output_dim=args.emb_dim,
-        steps=max_len,
-        max_len=max_len,
-        nhead=args.nheads,
-        d_hid=args.d_hid,
-        emb_dim=args.emb_dim,
-        num_actions=num_actions,
-        nlayers=args.nlayers,
-        dropout=args.dropout,
-        input_coord_dims=input_coord_dims,
-        gaussian_m_state=gaussian_m_state,
-        gaussian_m_action=gaussian_m_action,
-        gaussian_sigma_state=gaussian_sigma_state,
-        gaussian_sigma_action=gaussian_sigma_action,
-        normalize_output_embeddings=normalize_cls,
-    ).to(device)
+    if not args.use_mlp_baseline:
+        encoder = BehaviorEncoderCLSattnSATyped(
+            input_channels=input_coord_dims,
+            cnn_output_dim=args.emb_dim,
+            steps=max_len,
+            max_len=max_len,
+            nhead=args.nheads,
+            d_hid=args.d_hid,
+            emb_dim=args.emb_dim,
+            num_actions=num_actions,
+            nlayers=args.nlayers,
+            dropout=args.dropout,
+            input_coord_dims=input_coord_dims,
+            gaussian_m_state=gaussian_m_state,
+            gaussian_m_action=gaussian_m_action,
+            gaussian_sigma_state=gaussian_sigma_state,
+            gaussian_sigma_action=gaussian_sigma_action,
+            normalize_output_embeddings=normalize_cls,
+        ).to(device)
+    else:
+        encoder = BehaviorEncoderMLPDouble(
+            input_channels=input_coord_dims,
+            cnn_output_dim=args.emb_dim,
+            steps=max_len,
+            max_len=max_len,
+            nhead=args.nheads,
+            d_hid=args.d_hid,
+            emb_dim=args.emb_dim,
+            num_actions=num_actions,
+            nlayers=args.nlayers,
+            dropout=args.dropout,
+            input_coord_dims=input_coord_dims,
+            gaussian_m_state=gaussian_m_state,
+            gaussian_m_action=gaussian_m_action,
+            gaussian_sigma_state=gaussian_sigma_state,
+            gaussian_sigma_action=gaussian_sigma_action,
+            normalize_output_embeddings=normalize_cls,
+        ).to(device)
 
     decoder = TrajectoryDecoder(args.emb_dim, input_coord_dims, decoder_action_dim, max_len).to(device)  # Removed spec_norm
     info_loss_fn = InstanceLoss(args.temperature, device=device)
@@ -476,11 +628,15 @@ def main():
     if args.save_data:
         # Save the MEAN embeddings
         json_mean_path = os.path.join(embeddings_folder_path, f"mean_{base_name}_seed{args.seed}.json")
+        if args.use_mlp_baseline:
+            json_mean_path = json_mean_path.replace(".json", "_mlp.json")
         save_policy_latents_to_json(mean_policy_latents, trajectories, true_labels, obj_feats_per_traj, json_mean_path)
 
         # Save the LEARNED embeddings (if they were computed)
         if learned_policy_latents:  # Check if dictionary is not empty
             json_learned_path = os.path.join(embeddings_folder_path, f"learned_{base_name}_seed{args.seed}.json")
+            if args.use_mlp_baseline:
+                json_learned_path = json_learned_path.replace(".json", "_mlp.json")
             save_policy_latents_to_json(
                 learned_policy_latents, trajectories, true_labels, obj_feats_per_traj, json_learned_path
             )
@@ -574,6 +730,10 @@ def main():
 
         print("--- Comparison Complete ---")
 
+    print("\n--- Running Leakage Check ---")
+    leakage_results = check_for_leakage(encoder, loader, device)
+    print(leakage_results)
+    print("--- Leakage Check Complete ---")
 
 if __name__ == "__main__":
     main()

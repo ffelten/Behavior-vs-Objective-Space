@@ -639,6 +639,274 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
 
         return normalized, attn_list_agg, _, _, cls_emb, cls_attn
 
+class BehaviorEncoderMLPDouble(nn.Module):
+    """A simple MLP baseline that flattens trajectories and processes them directly.
+    No RFF, no CNN, no temporal encoding, no transformer - just MLPs.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,  # Kept for API compatibility
+        cnn_output_dim: int,  # Kept for API compatibility
+        steps: int,  # Max trajectory length
+        nhead: int,  # Kept for API compatibility, not used
+        d_hid: int,
+        emb_dim: int,
+        num_actions: int,
+        nlayers: int = 6,  # Kept for API compatibility
+        dropout: float = 0.1,
+        max_len: int = 100,
+        input_coord_dims: int = 2,
+        # All other kwargs kept for API compatibility but ignored
+        max_freq: float = 2.0,
+        coord_state_kind: str = "gaussian",
+        coord_action_kind: str = "gaussian",
+        scaled_init_log_scale_state: float = 0.0,
+        scaled_init_log_scale_action: float = 0.0,
+        gaussian_m_state: int = 1024,
+        gaussian_sigma_state: float = 10.0,
+        gaussian_m_action: int = 512,
+        gaussian_sigma_action: float = 10.0,
+        normalize_output_embeddings: bool = False,
+    ):
+        super().__init__()
+        self.d_model = emb_dim
+        self.model_type = "BE_MLP_Double"
+        self.input_coord_dims = input_coord_dims
+        self.max_len = max_len
+        self.num_actions = num_actions
+        self.normalize_output_embeddings = normalize_output_embeddings
+
+        # Calculate input dimension for flattened trajectory
+        # Each timestep has: state (input_coord_dims) + action (1 for discrete, num_actions for continuous)
+        # We'll handle both cases in forward()
+        self.state_dim = input_coord_dims
+        
+        # For discrete actions: one-hot encode to num_actions dims
+        # For continuous actions: use num_actions dims directly
+        self.action_dim = num_actions
+        
+        # Flattened input size per timestep
+        self.per_step_dim = self.state_dim + self.action_dim
+        self.flat_input_dim = max_len * self.per_step_dim
+
+        # For returning local tokens (needed for DIM loss compatibility)
+        # We'll create pseudo-tokens by chunking the hidden representation
+        self.per_token_encoder = nn.Sequential(
+            nn.Linear(self.per_step_dim, d_hid // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hid // 2, emb_dim),
+        )
+        
+        # Aggregation from per-token representations
+        self.aggregation_mlp = nn.Sequential(
+            nn.Linear(emb_dim, d_hid),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hid, emb_dim),
+        )
+
+        self._dropout_p = dropout
+        self._register_dropout_modules()
+        self.init_weights()
+        
+        print(f"[MLP Baseline] Simple flattened MLP encoder. Input dim: {self.flat_input_dim}, Output dim: {emb_dim}")
+
+    def _register_dropout_modules(self):
+        self._dropouts = []
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                self._dropouts.append(m)
+
+    def set_dropout(self, p: float):
+        for dr in self._dropouts:
+            dr.p = p
+        self._dropout_p = p
+
+    def init_weights(self) -> None:
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, states: th.Tensor, actions: th.Tensor, src_key_padding_mask: th.Tensor | None = None) -> tuple:
+        B, T, *_ = states.shape
+        device = states.device
+
+        # 1. Flatten states
+        if states.dim() == 5:
+            states_flat = states.view(B, T, -1)
+            if states_flat.shape[-1] > self.state_dim:
+                states_flat = states_flat[..., :self.state_dim]
+        elif states.dim() == 3:
+            states_flat = states
+        else:
+            raise ValueError(f"Unsupported state dimension: {states.dim()}")
+
+        # 2. Process actions
+        if actions.dim() == 2:
+            actions = actions.unsqueeze(-1)
+        
+        is_discrete = (actions.shape[-1] == 1)
+        
+        if is_discrete:
+            actions_long = actions.long().squeeze(-1)
+            actions_flat = F.one_hot(actions_long, num_classes=self.num_actions).float()
+        else:
+            actions_flat = actions
+
+        # 3. Concatenate per timestep [B, T, state_dim + action_dim]
+        sa_per_step = th.cat([states_flat, actions_flat], dim=-1)
+
+        # 4. Encode EACH token through shared MLP -> [B, T, emb_dim]
+        # This creates tokens that are used for both DIM loss AND aggregation
+        token_embeddings = self.per_token_encoder(sa_per_step)  # [B, T, emb_dim]
+
+        # 5. Apply mask for aggregation
+        if src_key_padding_mask is not None:
+            valid_mask = (~src_key_padding_mask).float().unsqueeze(-1)  # [B, T, 1]
+            masked_tokens = token_embeddings * valid_mask
+            pooled = masked_tokens.sum(dim=1) / valid_mask.sum(dim=1).clamp(min=1)
+        else:
+            pooled = token_embeddings.mean(dim=1)
+
+        # 6. Aggregate to get CLS-like embedding
+        cls_emb = self.aggregation_mlp(pooled)
+
+        # 7. Normalize
+        if self.normalize_output_embeddings:
+            cls_emb = F.normalize(cls_emb, p=2, dim=-1)
+            token_embeddings = F.normalize(token_embeddings, p=2, dim=-1)
+
+        # 8. Interleave tokens for DIM loss compatibility [B, 2*T, emb_dim]
+        # Split token_embeddings conceptually into state and action parts
+        # Since we encoded (s,a) pairs together, we duplicate for interleaving
+        interleaved_tokens = token_embeddings.unsqueeze(2).expand(-1, -1, 2, -1).reshape(B, 2 * T, self.d_model)
+
+        dummy_attn = th.zeros(B, 2 * T, device=device)
+        
+        return interleaved_tokens, dummy_attn, None, None, cls_emb, dummy_attn
+
+class BehaviorEncoderMLPBaseline(nn.Module):
+    """
+    Simplest MLP baseline that supports DIM loss.
+    
+    Architecture:
+        (s,a) pairs → shared MLP → tokens → mean pool → CLS
+        
+    Only ONE network (token_net). CLS = mean(tokens).
+    No separate aggregation network.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        cnn_output_dim: int,
+        steps: int,
+        nhead: int,
+        d_hid: int,
+        emb_dim: int,
+        num_actions: int,
+        nlayers: int = 6,
+        dropout: float = 0.1,
+        max_len: int = 100,
+        normalize_output_embeddings: bool = True,
+        input_coord_dims: int = 2,
+        **kwargs,
+    ):
+        super().__init__()
+        self.d_model = emb_dim
+        self.model_type = "BE_MLP_Simple"
+        self.input_coord_dims = input_coord_dims
+        self.max_len = max_len
+        self.num_actions = num_actions
+        self.normalize_output_embeddings = normalize_output_embeddings
+
+        self.state_dim = input_coord_dims
+        self.action_dim = num_actions
+        self.per_step_dim = self.state_dim + self.action_dim
+
+        # Single network: (s,a) → token embedding
+        self.token_net = nn.Sequential(
+            nn.Linear(self.per_step_dim, d_hid),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hid, d_hid),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hid, emb_dim),
+        )
+
+        self._dropout_p = dropout
+        self._register_dropout_modules()
+        self.init_weights()
+
+        n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"[MLP Simple] (s,a) → MLP → tokens → mean → CLS | Params: {n_params:,}")
+
+    def _register_dropout_modules(self):
+        self._dropouts = []
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                self._dropouts.append(m)
+
+    def set_dropout(self, p: float):
+        for dr in self._dropouts:
+            dr.p = p
+        self._dropout_p = p
+
+    def init_weights(self) -> None:
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, states: th.Tensor, actions: th.Tensor, src_key_padding_mask: th.Tensor | None = None) -> tuple:
+        B, T, *_ = states.shape
+        device = states.device
+
+        # 1. Flatten states
+        if states.dim() == 5:
+            states_flat = states.view(B, T, -1)[..., :self.state_dim]
+        elif states.dim() == 3:
+            states_flat = states
+        else:
+            raise ValueError(f"Unsupported state dimension: {states.dim()}")
+
+        # 2. Process actions
+        if actions.dim() == 2:
+            actions = actions.unsqueeze(-1)
+        
+        if actions.shape[-1] == 1:  # Discrete
+            actions_flat = F.one_hot(actions.long().squeeze(-1), num_classes=self.num_actions).float()
+        else:  # Continuous
+            actions_flat = actions
+
+        # 3. Concatenate per timestep [B, T, per_step_dim]
+        sa = th.cat([states_flat, actions_flat], dim=-1)
+
+        # 4. Apply single token network to each timestep
+        # [B, T, per_step_dim] → [B, T, emb_dim]
+        token_embeddings = self.token_net(sa)
+
+        # 5. CLS = masked mean of tokens
+        if src_key_padding_mask is not None:
+            valid_mask = (~src_key_padding_mask).float().unsqueeze(-1)  # [B, T, 1]
+            masked_tokens = token_embeddings * valid_mask
+            cls_emb = masked_tokens.sum(dim=1) / valid_mask.sum(dim=1).clamp(min=1)
+        else:
+            cls_emb = token_embeddings.mean(dim=1)  # [B, emb_dim]
+
+        # 6. Normalize if required
+        if self.normalize_output_embeddings:
+            cls_emb = F.normalize(cls_emb, p=2, dim=-1)
+            token_embeddings = F.normalize(token_embeddings, p=2, dim=-1)
+
+        # 7. Interleave tokens for DIM loss compatibility [B, 2*T, emb_dim]
+        interleaved_tokens = token_embeddings.unsqueeze(2).expand(-1, -1, 2, -1).reshape(B, 2 * T, self.d_model)
+
+        dummy_attn = th.zeros(B, 2 * T, device=device)
+
+        return interleaved_tokens, dummy_attn, None, None, cls_emb, dummy_attn
 
 # Decoder
 class TrajectoryDecoder(nn.Module):
@@ -884,3 +1152,79 @@ class VarianceCovarianceLoss(nn.Module):
         cov_loss = cov_z[off_diag_mask].pow(2).sum() / num_features
 
         return self.std_coeff * std_loss + self.cov_coeff * cov_loss
+
+
+class VICRegLoss(nn.Module):
+    """
+    Full VICReg loss with all three components:
+    - Invariance: MSE between two views of the same sample (requires augmentation)
+    - Variance: Force each dimension to have std >= 1
+    - Covariance: Force dimensions to be uncorrelated
+    
+    Reference: Bardes et al., "VICReg: Variance-Invariance-Covariance Regularization"
+    """
+    
+    def __init__(
+        self,
+        inv_weight: float = 25.0,
+        var_weight: float = 25.0,
+        cov_weight: float = 1.0,
+        eps: float = 1e-4,
+    ):
+        super().__init__()
+        self.inv_weight = inv_weight
+        self.var_weight = var_weight
+        self.cov_weight = cov_weight
+        self.eps = eps
+    
+    def forward(self, z1: th.Tensor, z2: th.Tensor) -> Tuple[th.Tensor, dict]:
+        """
+        Compute full VICReg loss between two views.
+        
+        Args:
+            z1: First view embeddings [B, D] (NOT normalized)
+            z2: Second view embeddings [B, D] (NOT normalized)
+            
+        Returns:
+            total_loss: Weighted sum of all components
+            loss_dict: Dictionary with individual loss values for logging
+        """
+        B, D = z1.shape
+        
+        # === 1. Invariance Loss ===
+        # MSE between the two views (same sample should have same embedding)
+        inv_loss = F.mse_loss(z1, z2)
+        
+        # === 2. Variance Loss ===
+        # Force std of each dimension >= 1 (across batch)
+        std_z1 = th.sqrt(z1.var(dim=0) + self.eps)
+        std_z2 = th.sqrt(z2.var(dim=0) + self.eps)
+        var_loss = th.mean(F.relu(1 - std_z1)) + th.mean(F.relu(1 - std_z2))
+        
+        # === 3. Covariance Loss ===
+        # Force off-diagonal elements of covariance matrix to be zero
+        z1_centered = z1 - z1.mean(dim=0)
+        z2_centered = z2 - z2.mean(dim=0)
+        
+        cov_z1 = (z1_centered.T @ z1_centered) / (B - 1)  # [D, D]
+        cov_z2 = (z2_centered.T @ z2_centered) / (B - 1)  # [D, D]
+        
+        # Off-diagonal elements
+        off_diag_mask = ~th.eye(D, dtype=th.bool, device=z1.device)
+        cov_loss = (cov_z1[off_diag_mask].pow(2).sum() + cov_z2[off_diag_mask].pow(2).sum()) / D
+        
+        # === Total Loss ===
+        total_loss = (
+            self.inv_weight * inv_loss +
+            self.var_weight * var_loss +
+            self.cov_weight * cov_loss
+        )
+        
+        loss_dict = {
+            'inv': inv_loss.item(),
+            'var': var_loss.item(),
+            'cov': cov_loss.item(),
+            'total': total_loss.item(),
+        }
+        
+        return total_loss, loss_dict

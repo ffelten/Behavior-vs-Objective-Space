@@ -495,80 +495,6 @@ def segment_contrastive_loss(
     return loss
 
 
-# ---------- Training & Evaluation ----------
-# def train_epoch(
-#     encoder, decoder, loader, optim, device, info_loss_fn, dim_loss_fn,
-#     recon_weight, info_weight, dim_weight,
-#     segment_weight=0.0, env_id=None
-# ): # Removed vol_weight, decorr_weight, least_volumes
-#     encoder.train()
-#     decoder.train()
-#     dim_loss_fn.train()
-#     total_loss = 0.0
-
-#     for states, actions, masks, _, returns in loader:
-#         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
-
-#         # --- Two stochastic forward passes for contrastive learning ---
-#         all_tokens1, _, _, _, cls_emb1, _ = encoder(states, actions, src_key_padding_mask=masks)
-#         all_tokens2, _, _, _, cls_emb2, _ = encoder(states, actions, src_key_padding_mask=masks)
-
-#         # Decoder can use either embedding, let's use the first one
-#         states_rec, actions_rec = decoder(cls_emb1)
-
-#         # --- Reconstruction Loss ---
-#         mask_flat = masks.view(masks.size(0), -1).unsqueeze(-1)
-#         valid = (~mask_flat).float()
-#         tgt_states = states
-#         tgt_actions = actions
-#         rec_state = ((states_rec - tgt_states).pow(2) * valid).sum() / valid.sum().clamp(min=1.0)
-#         rec_action = ((actions_rec - tgt_actions).pow(2) * valid).sum() / valid.sum().clamp(min=1.0)
-#         recon_loss = rec_state + rec_action
-
-#         # --- CORRECTED InfoNCE Loss ---
-#         info_loss = info_loss_fn(cls_emb1, cls_emb2)
-
-#         # --- Deep InfoMax Loss (averaged over both views) ---
-#         interleaved_mask = expand_interleaved_mask(masks)
-#         dim_loss1 = dim_loss_fn(cls_emb1, all_tokens1[:, 1:, :], interleaved_mask)
-#         dim_loss2 = dim_loss_fn(cls_emb2, all_tokens2[:, 1:, :], interleaved_mask)
-#         dim_loss = (dim_loss1 + dim_loss2) / 2.0
-
-#         # --- NEW Segment Contrastive Loss ---
-#         seg_loss = th.tensor(0.0, device=device)
-#         # if segment_weight > 0.0:
-#         #     # Define segment length L based on environment
-#         #     L_min, L_max = (2, 12) if "dst" in env_id or "sea" in env_id else (8, 16)
-#         #     T = states.shape[1]
-#         #     current_L_max = min(L_max, T - 1)
-#         #     L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
-
-#         #     seg_loss1 = segment_contrastive_loss(cls_emb1, encoder, states, actions, masks, L, info_loss_fn, num_segments=4, pairwise_segments=True)
-#         #     seg_loss2 = segment_contrastive_loss(cls_emb2, encoder, states, actions, masks, L, info_loss_fn, num_segments=4, pairwise_segments=True)
-#         #     seg_loss = (seg_loss1 + seg_loss2) / 2.0
-
-#         # --- Other losses (removed) ---
-#         # decorr_loss = th.tensor(0.0, device=device)
-#         # vol_loss = th.tensor(0.0, device=device)
-
-#         # --- Total Weighted Loss ---
-#         loss = (
-#             recon_weight * recon_loss
-#             + info_weight * info_loss
-#             + dim_weight * dim_loss
-#             + segment_weight * seg_loss
-#             # Removed vol_loss and decorr_loss
-#         )
-
-#         optim.zero_grad()
-#         loss.backward()
-#         th.nn.utils.clip_grad_norm_(encoder.parameters(), 1.0)
-#         th.nn.utils.clip_grad_norm_(decoder.parameters(), 1.0)
-#         optim.step()
-#         total_loss += loss.item()
-
-#     return total_loss / max(len(loader), 1)
-
 
 def train_epoch(
     encoder,
@@ -591,6 +517,10 @@ def train_epoch(
     decoder.train()
     dim_loss_fn.train()
     total_loss = 0.0
+
+    # Check if encoder is MLP baseline (no CLS token in output)
+    is_mlp_baseline = hasattr(encoder, 'model_type') and "MLP" in encoder.model_type
+
 
     for states, actions, masks, _, returns in loader:
         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
@@ -644,18 +574,38 @@ def train_epoch(
             total_valid_steps += valid_len
 
         # Average over all valid steps in the batch
-        rec_state_loss = rec_state_loss / max(total_valid_steps, 1)
-        rec_action_loss = rec_action_loss / max(total_valid_steps, 1)
-        recon_loss = rec_state_loss + rec_action_loss
+        if recon_weight > 0.0:
+            rec_state_loss = rec_state_loss / max(total_valid_steps, 1)
+            rec_action_loss = rec_action_loss / max(total_valid_steps, 1)
+            recon_loss = rec_state_loss + rec_action_loss
+        else:
+            recon_loss = th.tensor(0.0, device=device)
 
         # --- CORRECTED InfoNCE Loss ---
-        info_loss = info_loss_fn(cls_emb1, cls_emb2)
+        if info_weight > 0.0:
+            info_loss = info_loss_fn(cls_emb1, cls_emb2)
+        else:
+            info_loss = th.tensor(0.0, device=device)
 
         # --- Deep InfoMax Loss (averaged over both views) ---
         interleaved_mask = expand_interleaved_mask(masks)
-        dim_loss1 = dim_loss_fn(cls_emb1, all_tokens1[:, 1:, :], interleaved_mask)
-        dim_loss2 = dim_loss_fn(cls_emb2, all_tokens2[:, 1:, :], interleaved_mask)
-        dim_loss = (dim_loss1 + dim_loss2) / 2.0
+
+        if dim_weight > 0.0:
+            if is_mlp_baseline:
+                # MLP baseline: all_tokens already excludes any CLS-like token
+                # Shape is [B, 2*T, D], mask is [B, 2*T]
+                local_tokens1 = all_tokens1
+                local_tokens2 = all_tokens2
+            else:
+                # Transformer: first token is CLS, skip it for local tokens
+                # Shape is [B, 1 + 2*T, D], we want [B, 2*T, D]
+                local_tokens1 = all_tokens1[:, 1:, :]
+                local_tokens2 = all_tokens2[:, 1:, :]
+            dim_loss1 = dim_loss_fn(cls_emb1, local_tokens1, interleaved_mask)
+            dim_loss2 = dim_loss_fn(cls_emb2, local_tokens2, interleaved_mask)
+            dim_loss = (dim_loss1 + dim_loss2) / 2.0
+        else:
+            dim_loss = th.tensor(0.0, device=device)
 
         # --- Segment Contrastive Loss ---
         seg_loss = th.tensor(0.0, device=device)
@@ -666,7 +616,11 @@ def train_epoch(
             current_L_max = min(L_max, T - 1)
             L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
 
-        vc_reg = (vc_loss_fn(cls_emb1_raw) + vc_loss_fn(cls_emb2_raw)) / 2.0
+        # vc_reg = (vc_loss_fn(cls_emb1_raw) + vc_loss_fn(cls_emb2_raw)) / 2.0
+        if vc_weight > 0.0:
+            vc_reg = vc_loss_fn(cls_emb1_raw)
+        else:
+            vc_reg = th.tensor(0.0, device=device)
 
         # --- Total Weighted Loss ---
         loss = (
@@ -687,46 +641,131 @@ def train_epoch(
 
     return total_loss / max(len(loader), 1)
 
+def train_epoch_vicreg_only(
+    encoder,
+    decoder,  # Kept for API compatibility, but not used
+    loader,
+    optim,
+    device,
+    info_loss_fn,  # Kept for API compatibility, but not used
+    dim_loss_fn,   # Kept for API compatibility, but not used
+    vc_loss_fn,    # Kept for API compatibility, but not used
+    recon_weight,  # Ignored
+    info_weight,   # Ignored
+    dim_weight,    # Ignored
+    segment_weight=0.0,  # Ignored
+    env_id=None,   # Kept for API compatibility
+    vc_weight=0.05,  # Ignored - we use VICReg weights instead
+    cls_norm=True,  # Ignored - VICReg needs unnormalized embeddings
+    # VICReg specific weights
+    vicreg_inv_weight: float = 25.0,
+    vicreg_var_weight: float = 50.0,
+    vicreg_cov_weight: float = 5.0,
+):
+    """
+    Training epoch using ONLY VICReg loss (Invariance + Variance + Covariance).
+    
+    The two forward passes with dropout act as the two "augmented views".
+    
+    Args:
+        encoder: The behavior encoder model
+        decoder: Not used, kept for API compatibility
+        loader: DataLoader
+        optim: Optimizer
+        device: torch device
+        info_loss_fn: Not used, kept for API compatibility
+        dim_loss_fn: Not used, kept for API compatibility
+        vc_loss_fn: Not used, kept for API compatibility
+        recon_weight: Ignored
+        info_weight: Ignored
+        dim_weight: Ignored
+        segment_weight: Ignored
+        env_id: Not used, kept for API compatibility
+        vc_weight: Ignored
+        cls_norm: Ignored (VICReg needs raw embeddings)
+        vicreg_inv_weight: Weight for invariance loss (default: 25.0)
+        vicreg_var_weight: Weight for variance loss (default: 25.0)
+        vicreg_cov_weight: Weight for covariance loss (default: 1.0)
+        
+    Returns:
+        avg_loss: Average loss over the epoch
+    """
+    encoder.train()
+    total_loss = 0.0
+    total_inv = 0.0
+    total_var = 0.0
+    total_cov = 0.0
+    total_info = 0.0
+    num_batches = 0
+    
+    eps = 1e-4
 
-# def train_epoch_sigreg(encoder, loader, optim, device, sigreg_loss_fn, lambda_reg=10.0):
-#     encoder.train()
-#     total_loss = 0.0
+    for states, actions, masks, _, returns in loader:
+        states, actions, masks = states.to(device), actions.to(device), masks.to(device)
+        num_batches += 1
 
-#     for states, actions, masks, _, _ in loader:
-#         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
+        # --- Two stochastic forward passes (dropout creates two "views") ---
+        _, _, _, _, cls_emb1_raw, _ = encoder(states, actions, src_key_padding_mask=masks)
+        _, _, _, _, cls_emb2_raw, _ = encoder(states, actions, src_key_padding_mask=masks)
+        
+        # VICReg operates on RAW (unnormalized) embeddings
+        z1 = cls_emb1_raw
+        z2 = cls_emb2_raw
+        B, D = z1.shape
 
-#         # 1. Generate Two Views (Dropout serves as augmentation)
-#         # Pass 1 (Source)
-#         z1, _ = encoder(states, actions, src_key_padding_mask=masks)
-#         # Pass 2 (Target)
-#         z2, _ = encoder(states, actions, src_key_padding_mask=masks)
+        # === 1. Invariance Loss ===
+        # MSE between the two views (same sample should have same embedding)
+        inv_loss = F.mse_loss(z1, z2)
 
-#         # 2. Prediction Loss
-#         # Predict z2 from z1
-#         pred_z2 = encoder.predictor(z1)
-#         # Predict z1 from z2 (Symmetrized)
-#         pred_z1 = encoder.predictor(z2)
+        # === 2. Variance Loss ===
+        # Force std of each dimension >= 1 (across batch)
+        std_z1 = th.sqrt(z1.var(dim=0) + eps)
+        std_z2 = th.sqrt(z2.var(dim=0) + eps)
+        var_loss = th.mean(F.relu(1 - std_z1)) + th.mean(F.relu(1 - std_z2))
 
-#         # MSE Prediction Error (Stop Gradient on targets is NOT needed in LeJEPA,
-#         # but often good practice. LeJEPA paper says SIGReg stabilizes it without stop-grad).
-#         # Let's follow pure LeJEPA: No stop-grad needed if Reg is strong.
-#         loss_pred = F.mse_loss(pred_z2, z2) + F.mse_loss(pred_z1, z1)
+        # === 3. Covariance Loss ===
+        # Force off-diagonal elements of covariance matrix to be zero
+        z1_centered = z1 - z1.mean(dim=0)
+        z2_centered = z2 - z2.mean(dim=0)
 
-#         # 3. SIGReg Loss (Regularization)
-#         # Force z1 and z2 to be Gaussian
-#         loss_reg = sigreg_loss_fn(z1) + sigreg_loss_fn(z2)
+        cov_z1 = (z1_centered.T @ z1_centered) / (B - 1)  # [D, D]
+        cov_z2 = (z2_centered.T @ z2_centered) / (B - 1)  # [D, D]
 
-#         # Total Loss
-#         loss = loss_pred + (lambda_reg * loss_reg)
+        # Off-diagonal elements
+        off_diag_mask = ~th.eye(D, dtype=th.bool, device=z1.device)
+        cov_loss = (cov_z1[off_diag_mask].pow(2).sum() + cov_z2[off_diag_mask].pow(2).sum()) / D
 
-#         optim.zero_grad()
-#         loss.backward()
-#         optim.step()
+        #InfoNCE loss l2 normalize embeddings
+        z1_norm = F.normalize(z1, dim=1)
+        z2_norm = F.normalize(z2, dim=1)
+        info_loss = info_loss_fn(z1_norm, z2_norm)
 
-#         total_loss += loss.item()
+        # === Total Loss ===
+        loss = (
+            vicreg_inv_weight * inv_loss +
+            vicreg_var_weight * var_loss +
+            vicreg_cov_weight * cov_loss +
+            info_weight * info_loss
+        )
 
-#     return total_loss / len(loader)
+        optim.zero_grad()
+        loss.backward()
+        th.nn.utils.clip_grad_norm_(encoder.parameters(), 1.0)
+        optim.step()
+        
+        total_loss += loss.item()
+        total_inv += inv_loss.item()
+        total_var += var_loss.item()
+        total_cov += cov_loss.item()
+        total_info += info_loss.item()
 
+    avg_loss = total_loss / max(num_batches, 1)
+    
+    # Optional: Print breakdown every epoch
+    # print(f"  VICReg breakdown - Inv: {total_inv/num_batches:.4f}, "
+    #       f"Var: {total_var/num_batches:.4f}, Cov: {total_cov/num_batches:.4f}")
+
+    return avg_loss
 
 def train_epoch_no_norm(
     encoder,
