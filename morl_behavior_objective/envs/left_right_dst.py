@@ -63,17 +63,20 @@ EPISODES_PER_POLICY = 50
 
 
 # env = mo_gym.make("left-right-dst-v0", render_mode=None)
-env = mo_gym.make("deep-sea-treasure-louvre-dst-v0", render_mode="human")
-# env = mo_gym.make("deep-sea-treasure-smooth-v0", render_mode="human")
+# env = mo_gym.make("deep-sea-treasure-louvre-dst-v0", render_mode="human")
+env = mo_gym.make("deep-sea-treasure-smooth-v0", render_mode="human")
 # env = mo_gym.make("deep-sea-treasure-v0", render_mode="human", dst_map=CONCAVE_MAP)
 
 policy_disc_returns: dict[str, npt.NDArray] = {}
 
-for policy_name, policy in OPTIMAL_POLICIES_LOUVRE_DST.items():
+for policy_name, policy in OPTIMAL_POLICIES_SMOOTH.items():
     env.reset()
     done = False
     disc_return = np.array([0.0, 0.0])
     discount = 1.0
+    import time
+
+    time.sleep(10)
     i = 0
     print("Executing policy: ", policy_name)
     while not done:
