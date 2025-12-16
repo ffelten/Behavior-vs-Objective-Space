@@ -10,9 +10,11 @@ from sklearn.manifold import trustworthiness  # type: ignore[import]
 import matplotlib.pyplot as plt  # type: ignore[import]
 from imitation.data.types import Trajectory  # type: ignore[import]
 from morl_behavior_objective.methods.behaviorencoder import (
+    BasicMLPEncoder,
     BehaviorEncoderCLSattnSATyped,
     BehaviorEncoderMLPBaseline,
     BehaviorEncoderMLPDouble,
+    BehaviorEncoderMLPWithLocalTokens,
     DeepInfoMaxLoss,
     InstanceLoss,
     TrajectoryDecoder,
@@ -401,7 +403,7 @@ def main():
             normalize_output_embeddings=normalize_cls,
         ).to(device)
     else:
-        encoder = BehaviorEncoderMLPDouble(
+        encoder = BasicMLPEncoder(
             input_channels=input_coord_dims,
             cnn_output_dim=args.emb_dim,
             steps=max_len,
@@ -628,15 +630,15 @@ def main():
     if args.save_data:
         # Save the MEAN embeddings
         json_mean_path = os.path.join(embeddings_folder_path, f"mean_{base_name}_seed{args.seed}.json")
-        if args.use_mlp_baseline:
-            json_mean_path = json_mean_path.replace(".json", "_mlp.json")
+        # if args.use_mlp_baseline:
+        #     json_mean_path = json_mean_path.replace(".json", "_mlp.json")
         save_policy_latents_to_json(mean_policy_latents, trajectories, true_labels, obj_feats_per_traj, json_mean_path)
 
         # Save the LEARNED embeddings (if they were computed)
         if learned_policy_latents:  # Check if dictionary is not empty
             json_learned_path = os.path.join(embeddings_folder_path, f"learned_{base_name}_seed{args.seed}.json")
-            if args.use_mlp_baseline:
-                json_learned_path = json_learned_path.replace(".json", "_mlp.json")
+            # if args.use_mlp_baseline:
+            #     json_learned_path = json_learned_path.replace(".json", "_mlp.json")
             save_policy_latents_to_json(
                 learned_policy_latents, trajectories, true_labels, obj_feats_per_traj, json_learned_path
             )

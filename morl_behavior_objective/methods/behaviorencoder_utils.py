@@ -596,6 +596,9 @@ def train_epoch(
                 # Shape is [B, 2*T, D], mask is [B, 2*T]
                 local_tokens1 = all_tokens1
                 local_tokens2 = all_tokens2
+                #for MLPT
+                num_tokens = local_tokens1.shape[1]  # 2*num_local_tokens
+                interleaved_mask = th.zeros(B, num_tokens, dtype=th.bool, device=device)
             else:
                 # Transformer: first token is CLS, skip it for local tokens
                 # Shape is [B, 1 + 2*T, D], we want [B, 2*T, D]

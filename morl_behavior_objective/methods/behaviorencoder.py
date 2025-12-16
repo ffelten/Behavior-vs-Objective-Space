@@ -908,6 +908,266 @@ class BehaviorEncoderMLPBaseline(nn.Module):
 
         return interleaved_tokens, dummy_attn, None, None, cls_emb, dummy_attn
 
+class BehaviorEncoderMLPWithLocalTokens(nn.Module):
+    """
+    MLP baseline that processes the FULL trajectory at once (like Transformer)
+    but creates local tokens for DIM loss compatibility.
+    
+    Architecture:
+        Full trajectory → Flatten → MLP → Split into tokens
+        CLS = mean(tokens)
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        cnn_output_dim: int,
+        steps: int,
+        nhead: int,
+        d_hid: int,
+        emb_dim: int,
+        num_actions: int,
+        nlayers: int = 6,
+        dropout: float = 0.1,
+        max_len: int = 100,
+        input_coord_dims: int = 2,
+        normalize_output_embeddings: bool = True,
+        num_local_tokens: int = 8,
+        **kwargs,
+    ):
+        super().__init__()
+        self.d_model = emb_dim
+        self.model_type = "BE_MLP_LocalTokens"
+        self.input_coord_dims = input_coord_dims
+        self.max_len = max_len
+        self.num_actions = num_actions
+        self.normalize_output_embeddings = normalize_output_embeddings
+        self.num_local_tokens = num_local_tokens
+
+        self.state_dim = input_coord_dims
+        self.action_dim = num_actions
+        self.per_step_dim = self.state_dim + self.action_dim
+        self.flat_input_dim = max_len * self.per_step_dim
+
+        # --- Main Network: Full trajectory → hidden → tokens ---
+        # We output directly to (num_local_tokens * emb_dim) so we can split
+        hidden_dim = d_hid * 2
+        
+        self.encoder_net = nn.Sequential(
+            nn.Linear(self.flat_input_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_local_tokens * emb_dim),  # Direct output
+        )
+
+        self._dropout_p = dropout
+        self._register_dropout_modules()
+        self.init_weights()
+
+        n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"[MLP LocalTokens] Full traj → {num_local_tokens} tokens (dim={emb_dim}) | CLS=mean(tokens) | Params: {n_params:,}")
+
+    def _register_dropout_modules(self):
+        self._dropouts = []
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                self._dropouts.append(m)
+
+    def set_dropout(self, p: float):
+        for dr in self._dropouts:
+            dr.p = p
+        self._dropout_p = p
+
+    def init_weights(self) -> None:
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, states: th.Tensor, actions: th.Tensor, src_key_padding_mask: th.Tensor | None = None) -> tuple:
+        B, T, *_ = states.shape
+        device = states.device
+
+        # 1. Flatten states
+        if states.dim() == 5:
+            states_flat = states.view(B, T, -1)[..., :self.state_dim]
+        elif states.dim() == 3:
+            states_flat = states
+        else:
+            raise ValueError(f"Unsupported state dimension: {states.dim()}")
+
+        # 2. Process actions
+        if actions.dim() == 2:
+            actions = actions.unsqueeze(-1)
+        
+        if actions.shape[-1] == 1:  # Discrete
+            actions_flat = F.one_hot(actions.long().squeeze(-1), num_classes=self.num_actions).float()
+        else:  # Continuous
+            actions_flat = actions
+
+        # 3. Concatenate and flatten ENTIRE trajectory
+        sa = th.cat([states_flat, actions_flat], dim=-1)
+        
+        # Apply mask by zeroing out padded steps
+        if src_key_padding_mask is not None:
+            valid_mask = (~src_key_padding_mask).float().unsqueeze(-1)
+            sa = sa * valid_mask
+        
+        flat_traj = sa.reshape(B, -1)  # [B, flat_input_dim]
+
+        # 4. Process full trajectory → tokens
+        # [B, flat_input_dim] → [B, num_local_tokens * emb_dim]
+        hidden = self.encoder_net(flat_traj)
+        
+        # 5. Reshape to get local tokens [B, num_local_tokens, emb_dim]
+        local_tokens = hidden.view(B, self.num_local_tokens, self.d_model)
+
+        # 6. CLS = mean of all tokens (simple and effective!)
+        cls_emb = local_tokens.mean(dim=1)  # [B, emb_dim]
+
+        # 7. Normalize if required
+        if self.normalize_output_embeddings:
+            cls_emb = F.normalize(cls_emb, p=2, dim=-1)
+            local_tokens = F.normalize(local_tokens, p=2, dim=-1)
+
+        # 8. Interleave tokens for DIM loss compatibility [B, 2*num_local_tokens, emb_dim]
+        interleaved_tokens = local_tokens.unsqueeze(2).expand(-1, -1, 2, -1).reshape(B, 2 * self.num_local_tokens, self.d_model)
+
+        dummy_attn = th.zeros(B, 2 * self.num_local_tokens, device=device)
+
+        return interleaved_tokens, dummy_attn, None, None, cls_emb, dummy_attn
+
+class BasicMLPEncoder(nn.Module):
+    """
+    A Global MLP baseline that flattens the ENTIRE trajectory into one vector
+    and maps it directly to a single embedding (CLS).
+    
+    Architecture:
+        [s0, a0, s1, a1, ..., sT, aT] (Flattened)
+                    ↓
+              MLP (Linear -> GELU -> ...)
+                    ↓
+              Single Embedding [B, emb_dim]
+              
+    Note: This model does NOT support DIM loss meaningfully because it does not 
+    produce local tokens, only a global summary.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        cnn_output_dim: int,
+        steps: int,
+        nhead: int,
+        d_hid: int,
+        emb_dim: int,
+        num_actions: int,
+        nlayers: int = 6,
+        dropout: float = 0.1,
+        max_len: int = 100,
+        input_coord_dims: int = 2,
+        normalize_output_embeddings: bool = True,
+        **kwargs,
+    ):
+        super().__init__()
+        self.d_model = emb_dim
+        self.model_type = "BE_MLP_Global"
+        self.input_coord_dims = input_coord_dims
+        self.max_len = max_len
+        self.num_actions = num_actions
+        self.normalize_output_embeddings = normalize_output_embeddings
+
+        self.state_dim = input_coord_dims
+        self.action_dim = num_actions
+        
+        # Calculate input dimension: T * (state + action)
+        self.flat_input_dim = max_len * (self.state_dim + self.action_dim)
+
+        # The Global Encoder MLP
+        self.encoder_net = nn.Sequential(
+            nn.Linear(self.flat_input_dim, d_hid),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hid, d_hid),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hid, emb_dim),
+        )
+
+        self._dropout_p = dropout
+        self._register_dropout_modules()
+        self.init_weights()
+
+        n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"[MLP Global] Full traj (dim={self.flat_input_dim}) → MLP → CLS | Params: {n_params:,}")
+
+    def _register_dropout_modules(self):
+        self._dropouts = []
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                self._dropouts.append(m)
+
+    def set_dropout(self, p: float):
+        for dr in self._dropouts:
+            dr.p = p
+        self._dropout_p = p
+
+    def init_weights(self) -> None:
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, states: th.Tensor, actions: th.Tensor, src_key_padding_mask: th.Tensor | None = None) -> tuple:
+        B, T, *_ = states.shape
+        device = states.device
+
+        # 1. Flatten states
+        if states.dim() == 5:
+            states_flat = states.view(B, T, -1)[..., :self.state_dim]
+        elif states.dim() == 3:
+            states_flat = states
+        else:
+            raise ValueError(f"Unsupported state dimension: {states.dim()}")
+
+        # 2. Process actions
+        if actions.dim() == 2:
+            actions = actions.unsqueeze(-1)
+        
+        if actions.shape[-1] == 1:  # Discrete
+            actions_flat = F.one_hot(actions.long().squeeze(-1), num_classes=self.num_actions).float()
+        else:  # Continuous
+            actions_flat = actions
+
+        # 3. Concatenate [B, T, state_dim + action_dim]
+        sa = th.cat([states_flat, actions_flat], dim=-1)
+        
+        # 4. Apply Masking BEFORE flattening
+        # This is crucial: we must zero out padded steps so they don't affect the MLP
+        if src_key_padding_mask is not None:
+            valid_mask = (~src_key_padding_mask).float().unsqueeze(-1)  # [B, T, 1]
+            sa = sa * valid_mask
+        
+        # 5. Flatten entire trajectory [B, T * (state+action)]
+        flat_traj = sa.reshape(B, -1)
+
+        # 6. Pass through MLP to get CLS embedding
+        cls_emb = self.encoder_net(flat_traj)  # [B, emb_dim]
+
+        # 7. Normalize if required
+        if self.normalize_output_embeddings:
+            cls_emb = F.normalize(cls_emb, p=2, dim=-1)
+
+        # 8. API Compatibility Return
+        # We return dummy tokens because this model doesn't have local tokens.
+        # The shape [B, 2*T, emb_dim] ensures the training loop doesn't crash if it checks shapes,
+        # but DIM loss should be disabled (weight=0) when using this model.
+        dummy_tokens = th.zeros(B, 2 * T, self.d_model, device=device)
+        dummy_attn = th.zeros(B, 2 * T, device=device)
+
+        return dummy_tokens, dummy_attn, None, None, cls_emb, dummy_attn
+
 # Decoder
 class TrajectoryDecoder(nn.Module):
     def __init__(self, emb_dim, state_dim, action_dim, max_len):  # Removed spec_norm
