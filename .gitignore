@@ -24,6 +24,7 @@ sdist/
 var/
 wheels/
 share/python-wheels/
+qutro/
 *.egg-info/
 .installed.cfg
 *.egg
