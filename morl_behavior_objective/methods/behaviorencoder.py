@@ -564,14 +564,49 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
             dr.p = p
         self._dropout_p = p
 
-    def init_weights(self) -> None:
-        for name, p in self.named_parameters():
-            # Skip the Fourier (RFF) weights!
-            if "rff.W" in name or "ff.log_scale" in name:
-                continue
+    # def init_weights(self) -> None:
+    #     for name, p in self.named_parameters():
+    #         # Skip the Fourier (RFF) weights!
+    #         if "rff.W" in name or "ff.log_scale" in name:
+    #             continue
             
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+    #         if p.dim() > 1:
+    #             nn.init.xavier_uniform_(p)
+
+    def init_weights(self) -> None:
+        """
+        Initialize weights properly, respecting special layers.
+        """
+        for name, module in self.named_modules():
+            # Skip RFF layers - they have special initialization
+            if isinstance(module, GaussianFourierFeatureEmbed):
+                continue  # W is already initialized as N(0, σ²)
+            
+            # Skip normalization layers
+            if isinstance(module, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                continue  # Default init (weight=1, bias=0) is correct
+            
+            # Skip embeddings
+            if isinstance(module, nn.Embedding):
+                continue  # Default init is fine, or use:
+                # nn.init.normal_(module.weight, mean=0, std=0.02)
+            
+            # Initialize Linear layers
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            
+            # Initialize Conv layers
+            if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+        
+        # Special: CLS token and type embeddings
+        nn.init.normal_(self.cls_token, mean=0, std=0.02)
+        nn.init.normal_(self.state_type_embedding, mean=0, std=0.02)
+        nn.init.normal_(self.action_type_embedding, mean=0, std=0.02)
 
     def forward(self, states: th.Tensor, actions: th.Tensor, src_key_padding_mask: th.Tensor | None = None) -> tuple:
         B, T, *_ = states.shape
@@ -1151,6 +1186,13 @@ class BasicMLPEncoder(nn.Module):
         
         # 5. Flatten entire trajectory [B, T * (state+action)]
         flat_traj = sa.reshape(B, -1)
+
+        cur_dim = flat_traj.shape[1]
+        if cur_dim < self.flat_input_dim:
+            pad = th.zeros(B, self.flat_input_dim - cur_dim, dtype=flat_traj.dtype, device=device)
+            flat_traj = th.cat([flat_traj, pad], dim=1)
+        elif cur_dim > self.flat_input_dim:
+            flat_traj = flat_traj[:, : self.flat_input_dim]
 
         # 6. Pass through MLP to get CLS embedding
         cls_emb = self.encoder_net(flat_traj)  # [B, emb_dim]

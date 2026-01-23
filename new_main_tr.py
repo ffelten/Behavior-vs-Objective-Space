@@ -226,7 +226,7 @@ def main():
     arg_hyp.add_argument("--nlayers", type=int, default=2)
     arg_hyp.add_argument("--d_hid", type=int, default=128)  # dsts 64 dtslr 32
     arg_hyp.add_argument("--dropout", type=float, default=0.1)
-    arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
+    arg_hyp.add_argument("--recon_weight", type=float, default=0.0)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
     arg_hyp.add_argument("--segment_weight", type=float, default=1.0)
@@ -287,10 +287,10 @@ def main():
     )
 
     if env_code == "DSTC" or env_code == "DSTS" or env_code == "DSTLR" or env_code == "DSTL":
-        gaussian_m_state = 18 #18 stable
+        gaussian_m_state = 128 #18 stable
         gaussian_m_action = 32 #not really used for discrete actions
-        gaussian_sigma_state = 0.1
-        gaussian_sigma_action = 0.1 #not really used for discrete actions
+        gaussian_sigma_state = 0.01
+        gaussian_sigma_action = 0.01 #not really used for discrete actions
     elif env_code == "MHW":
         gaussian_m_state = 128
         gaussian_m_action = 32
@@ -299,8 +299,8 @@ def main():
     else:
         gaussian_m_state = 128
         gaussian_m_action = 32
-        gaussian_sigma_state = 0.1
-        gaussian_sigma_action = 0.1
+        gaussian_sigma_state = 0.001
+        gaussian_sigma_action = 0.001
 
     model_dir = args.model_dir + f"{env_code}/"
     args.model_dir = model_dir
@@ -463,12 +463,29 @@ def main():
                 vc_weight=0.05
             )
             pbar.set_description(f"Epoch {epoch + 1}/{args.epochs} | Loss: {loss:.4f}")
+            if epoch == 0:
+                best_loss = loss
+                # best_model_path = model_path.replace(".pt", "_best.pt")
+                
+                th.save(
+                    {"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()},
+                    model_path,
+                )
+                pbar.set_postfix(best_loss=f"{best_loss:.4f}")
+            elif loss < best_loss:
+                best_loss = loss
+                best_epoch = epoch + 1
+                th.save(
+                    {"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()},
+                    model_path,
+                )
+                pbar.set_postfix(best_loss=f"{best_loss:.4f}")
         os.makedirs(args.model_dir, exist_ok=True)
-        th.save(
-            {"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()},
-            model_path,
-        )
-        print(f"Saved checkpoint to {model_path}")
+        # th.save(
+        #     {"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()},
+        #     model_path,
+        # )
+        print(f"Saved checkpoint from epoch {best_epoch} to {model_path}")
     else:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model checkpoint not found at {model_path}. Please train first with --train.")

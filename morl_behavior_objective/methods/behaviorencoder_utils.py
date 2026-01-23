@@ -554,6 +554,7 @@ def train_epoch(
         rec_state_loss = 0.0
         rec_action_loss = 0.0
         total_valid_steps = 0
+        B = states.size(0)
         if recon_weight > 0.0:    
             B = states.size(0)
             for b in range(B):

@@ -2,8 +2,8 @@
 
 
 for seed in {0..4}; do
-    python new_main_tr.py -DSTS --epochs 100 --train --seed $seed --d_hid 32 --save_data 
-    python new_main_tr.py -DSTLR --epochs 100 --train --seed $seed --d_hid 32 --save_data 
+    python new_main_tr.py -DSTS --epochs 100 --train --seed $seed --d_hid 32 --save_data --with_lines
+    python new_main_tr.py -DSTLR --epochs 100 --train --seed $seed --d_hid 32 --save_data --with_lines
 done
 
 # Baseline model
