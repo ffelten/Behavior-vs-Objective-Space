@@ -204,7 +204,7 @@ def main():
     arg_viz.add_argument(
         "--visualize", action="store_true", help="Whether to visualize trajectory embeddings before aggregation"
     )
-    arg_viz.add_argument("--model_dir", default="models/no_topo/")
+    arg_viz.add_argument("--model_dir", default="final_models/no_topo/")
     arg_viz.add_argument("--model_prefix", default="be")
     arg_viz.add_argument("--save_data", action="store_true", help="Save the aggregated policy embeddings to a JSON file")
     arg_viz.add_argument(
@@ -229,7 +229,7 @@ def main():
     arg_hyp.add_argument("--recon_weight", type=float, default=1.0)
     arg_hyp.add_argument("--info_weight", type=float, default=1.0)
     arg_hyp.add_argument("--dim_weight", type=float, default=1.0)
-    arg_hyp.add_argument("--segment_weight", type=float, default=0.0)
+    arg_hyp.add_argument("--segment_weight", type=float, default=1.0)
     arg_hyp.add_argument("--temperature", type=float, default=0.05)
     arg_hyp.add_argument("--state_scaler", default="quantile_normal")
     arg_hyp.add_argument("--action_scaler", default="quantile_normal")
@@ -403,7 +403,10 @@ def main():
             normalize_output_embeddings=normalize_cls,
         ).to(device)
     else:
-        encoder = BasicMLPEncoder(
+        baseline_model = BasicMLPEncoder if args.model_prefix == "basic" else BehaviorEncoderMLPBaseline if args.model_prefix == "mlp" else None
+        if baseline_model is None:
+            raise ValueError(f"Unknown model prefix {args.model_prefix} for MLP baseline.")
+        encoder = baseline_model(
             input_channels=input_coord_dims,
             cnn_output_dim=args.emb_dim,
             steps=max_len,
@@ -457,6 +460,7 @@ def main():
                 segment_weight=args.segment_weight,
                 env_id=env_id,
                 cls_norm=normalize_cls,
+                vc_weight=0.05
             )
             pbar.set_description(f"Epoch {epoch + 1}/{args.epochs} | Loss: {loss:.4f}")
         os.makedirs(args.model_dir, exist_ok=True)
@@ -500,7 +504,7 @@ def main():
             visualize_trajectory_embeddings(embeddings, policies, args.emb_dim, highlight_pids=args.viz_policy_ids)
 
     # --- Setup paths for outputs ---
-    image_dir = f"./images/no_topo/{env_id}/"
+    image_dir = f"./final_images/no_topo/{env_id}/"
     os.makedirs(image_dir, exist_ok=True)
 
     # --- Mean Aggregation & Visualization ---

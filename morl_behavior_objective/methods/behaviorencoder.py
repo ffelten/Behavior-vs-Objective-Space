@@ -1024,7 +1024,7 @@ class BehaviorEncoderMLPWithLocalTokens(nn.Module):
         # 5. Reshape to get local tokens [B, num_local_tokens, emb_dim]
         local_tokens = hidden.view(B, self.num_local_tokens, self.d_model)
 
-        # 6. CLS = mean of all tokens (simple and effective!)
+        # 6. CLS = mean of all tokens
         cls_emb = local_tokens.mean(dim=1)  # [B, emb_dim]
 
         # 7. Normalize if required

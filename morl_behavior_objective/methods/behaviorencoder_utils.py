@@ -190,7 +190,6 @@ def segment_contrastive_loss(
     actions: th.Tensor,
     masks: th.Tensor,
     L: int,
-    temperature: float = 0.5,
     num_segments: int = 2,
     pairwise_segments: bool = False,
     contrastive_loss_fn: nn.Module = InstanceLoss(0.5, device=th.device("cpu")),
@@ -418,7 +417,7 @@ def decorrelation_loss(z):
     return loss
 
 
-def segment_contrastive_loss(
+def segment_contrastive_loss_no_t(
     full_cls_emb: th.Tensor,
     encoder: nn.Module,
     states: th.Tensor,
@@ -508,9 +507,9 @@ def train_epoch(
     recon_weight,
     info_weight,
     dim_weight,
-    segment_weight=0.0,
+    segment_weight,
+    vc_weight,
     env_id=None,
-    vc_weight=0.05,
     cls_norm=True
 ):
     encoder.train()
@@ -541,10 +540,11 @@ def train_epoch(
             cls_emb2 = F.normalize(cls_emb2_raw, dim=1)
 
         # Decoder can use either embedding, let's use the first one
-        if cls_norm:
-            states_rec, actions_rec = decoder(cls_emb1)
-        else:
-            states_rec, actions_rec = decoder(cls_emb1_raw)
+        if recon_weight > 0.0:
+            if cls_norm:
+                states_rec, actions_rec = decoder(cls_emb1)
+            else:
+                states_rec, actions_rec = decoder(cls_emb1_raw)
 
         # --- IMPROVED: Mask-Aware Reconstruction Loss ---
         # Calculate valid lengths for each trajectory in the batch
@@ -554,24 +554,24 @@ def train_epoch(
         rec_state_loss = 0.0
         rec_action_loss = 0.0
         total_valid_steps = 0
+        if recon_weight > 0.0:    
+            B = states.size(0)
+            for b in range(B):
+                valid_len = int(valid_lengths[b].item())
+                if valid_len == 0:
+                    continue
 
-        B = states.size(0)
-        for b in range(B):
-            valid_len = int(valid_lengths[b].item())
-            if valid_len == 0:
-                continue
-
-            # Loss for this trajectory (only over valid steps)
-            rec_state_loss += (states_rec[b, :valid_len] - states[b, :valid_len]).pow(2).sum()
-            if discrete_actions:
-                # For discrete actions, use one-hot encoding for reconstruction loss
-                act_logits = actions_rec[b, :valid_len]
-                act_targets = actions[b, :valid_len].long().squeeze(-1)
-                rec_action_loss += F.cross_entropy(act_logits, act_targets, reduction='sum')
-                # print(f"Batch {b}, rec_action_loss: {rec_action_loss}")
-            else:
-                rec_action_loss += (actions_rec[b, :valid_len] - actions[b, :valid_len]).pow(2).sum()
-            total_valid_steps += valid_len
+                # Loss for this trajectory (only over valid steps)
+                rec_state_loss += (states_rec[b, :valid_len] - states[b, :valid_len]).pow(2).sum()
+                if discrete_actions:
+                    # For discrete actions, use one-hot encoding for reconstruction loss
+                    act_logits = actions_rec[b, :valid_len]
+                    act_targets = actions[b, :valid_len].long().squeeze(-1)
+                    rec_action_loss += F.cross_entropy(act_logits, act_targets, reduction='sum')
+                    # print(f"Batch {b}, rec_action_loss: {rec_action_loss}")
+                else:
+                    rec_action_loss += (actions_rec[b, :valid_len] - actions[b, :valid_len]).pow(2).sum()
+                total_valid_steps += valid_len
 
         # Average over all valid steps in the batch
         if recon_weight > 0.0:
@@ -618,6 +618,13 @@ def train_epoch(
             T = states.shape[1]
             current_L_max = min(L_max, T - 1)
             L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
+            loss_seg_1 = segment_contrastive_loss(cls_emb1, encoder, states, actions, masks, L=L,
+                                                 contrastive_loss_fn=info_loss_fn, num_segments=4,
+                                                    pairwise_segments=True)[0]
+            loss_seg_2 = segment_contrastive_loss(cls_emb2, encoder, states, actions, masks, L=L,
+                                                 contrastive_loss_fn=info_loss_fn, num_segments=4,
+                                                pairwise_segments=True)[0]
+            loss_seg = (loss_seg_1 + loss_seg_2) / 2.0
 
         # vc_reg = (vc_loss_fn(cls_emb1_raw) + vc_loss_fn(cls_emb2_raw)) / 2.0
         if vc_weight > 0.0:
@@ -630,7 +637,7 @@ def train_epoch(
             recon_weight * recon_loss
             + info_weight * info_loss
             + dim_weight * dim_loss
-            + segment_weight * seg_loss
+            + segment_weight * loss_seg
             + vc_weight * vc_reg
         )
 
@@ -1299,7 +1306,7 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
 
     # Path to save embeddings to (e.g., .../embeddings/)
     # This now correctly uses the base path, so it's a sibling to seed{s}
-    embeddings_folder_path = os.path.join(base_trajectories_path, "embeddings")
+    embeddings_folder_path = os.path.join(base_trajectories_path, "final_embeddings")
     os.makedirs(embeddings_folder_path, exist_ok=True)
 
     print(f"Loading data from: {trajectories_directory_path}")
