@@ -1,10 +1,12 @@
 """This script renders and saves optimal policies for the Left-Right DST environment as MP4 videos."""
 
 import os
-import numpy as np
-import mo_gymnasium as mo_gym
+
 import imageio
-from morl_behavior_objective import *  # noqa: F401
+import mo_gymnasium as mo_gym
+import numpy as np
+
+import morl_behavior_objective  # noqa: F401  # registers custom DST environments via side effect
 
 # Action definitions
 UP = 0
@@ -84,11 +86,15 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 ENV_ID = "deep-sea-treasure-smooth-v0"
 FPS = 4  # Frames per second
 
+
 # Function to render and save a policy as MP4
 def render_policy_to_video(policy_name: str, policy: list[int], env_id: str, save_path: str, fps: int = 4):
-    env = mo_gym.make(env_id, render_mode="rgb_array" #,dst_map=CONCAVE_MAP
-                      )
-    obs, _ = env.reset()
+    """Render a fixed action sequence in the environment and save the frames as an MP4."""
+    env = mo_gym.make(
+        env_id,
+        render_mode="rgb_array",  # ,dst_map=CONCAVE_MAP
+    )
+    _obs, _ = env.reset()
     done = False
     i = 0
     frames = []
@@ -99,13 +105,14 @@ def render_policy_to_video(policy_name: str, policy: list[int], env_id: str, sav
 
         action = policy[i]
         i += 1
-        obs, reward, terminated, truncated, info = env.step(action)
+        _obs, _reward, terminated, truncated, _info = env.step(action)
         done = terminated or truncated
 
     env.close()
 
     imageio.mimsave(save_path, frames, fps=fps, codec="libx264")
     print(f"Saved: {save_path}")
+
 
 # Render and save each policy
 for policy_name, policy in OPTIMAL_POLICIES_SMOOTH.items():

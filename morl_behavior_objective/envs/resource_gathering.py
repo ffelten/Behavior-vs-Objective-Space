@@ -1,3 +1,5 @@
+"""This script plots the Pareto frontier for the Resource Gathering environment."""
+
 import json
 import os
 
@@ -24,6 +26,7 @@ OPTIMAL_POLICIES = {
 
 
 def collect_trajectory(policy: list[int]) -> tuple[list, list, npt.NDArray]:
+    """Roll out a fixed action sequence and return its states, actions, and discounted return."""
     env.reset()
     done = False
     disc_return = np.array([0.0, 0.0, 0.0])
@@ -35,7 +38,7 @@ def collect_trajectory(policy: list[int]) -> tuple[list, list, npt.NDArray]:
     while not done:
         action = policy[i]
         i += 1
-        obs, reward, terminated, truncated, info = env.step(action)
+        obs, reward, terminated, truncated, _info = env.step(action)
         done = terminated or truncated
         disc_return += discount * reward
         discount *= gamma

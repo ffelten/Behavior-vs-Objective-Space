@@ -65,6 +65,7 @@ exclude = [
     "templates",
     "venv",
     "docs",
+    "*.ipynb",
 ]
 
 # Same as Black.
@@ -95,6 +96,26 @@ ignore = [
   "S607",     # start-process-with-partial-path
   "T201",     # print
   "TRY003",     # print
+  # --- Research/ML conventions: silence rules that fight scientific code ---
+  "ARG001",   # unused-function-argument (callback/interface signatures)
+  "ARG002",   # unused-method-argument (nn.Module/gym API overrides)
+  "C901",     # complex-structure (research functions are inherently branchy)
+  "ERA001",   # commented-out-code (exploratory alternatives in scripts/notebooks)
+  "FBT001",   # boolean-typed positional arg in function definition
+  "FBT002",   # boolean default positional arg
+  "FBT003",   # boolean positional value in call
+  "N802",     # invalid-function-name (math notation)
+  "N803",     # invalid-argument-name (math notation: B, L, T)
+  "N806",     # non-lowercase-variable-in-function (math notation: D_mean)
+  "N812",     # lowercase-imported-as-non-lowercase (torch.nn.functional as F)
+  "NPY002",   # legacy np.random (global-seeded for experiment reproducibility)
+  "PLC0415",  # import-outside-top-level (lazy imports for optional/heavy deps)
+  "PLR0911",  # too-many-return-statements
+  "PLR0912",  # too-many-branches
+  "PLR0913",  # too-many-arguments
+  "PLR0915",  # too-many-statements
+  "PLR2004",  # magic-value-comparison (thresholds in plots/checks)
+  "PLW2901",  # redefined-loop-name
 ]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
@@ -148,6 +169,15 @@ order-by-type = false
 ]
 "**/templates/**/*.py" = ["ALL"]
 "**/deep_sea_treasure/**/*.py" = ["ALL"]
+# Exploratory analysis scripts: relax docs/structure rules.
+"**/analysis/**/*.py" = [
+    "D",       # Pydocstyle - exploratory analysis scripts.
+    "INP001",  # implicit-namespace-package
+    "E402",    # module-import-not-at-top-of-file
+]
+"**/methods/*.py" = [
+    "D",       # Pydocstyle - research model code; docstrings tracked separately.
+]
 
 
 ###################################### FORMAT ########################################
