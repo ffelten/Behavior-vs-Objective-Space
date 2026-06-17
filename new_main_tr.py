@@ -1,121 +1,112 @@
+"""Train and evaluate behavior-encoder transformers across the studied MORL environments."""
+
 import argparse
 import os
 import random
+import warnings
 
+from imitation.data.types import Trajectory  # type: ignore[import]
 import numpy as np  # type: ignore[import]
+from scipy.stats import spearmanr  # type: ignore[import]
+from sklearn.manifold import trustworthiness  # type: ignore[import]
+from sklearn.metrics import pairwise_distances  # type: ignore[import]
 import torch as th  # type: ignore[import]
 from tqdm import tqdm  # type: ignore[import]
-from sklearn.metrics import pairwise_distances  # type: ignore[import]
-from sklearn.manifold import trustworthiness  # type: ignore[import]
-import matplotlib.pyplot as plt  # type: ignore[import]
-from imitation.data.types import Trajectory  # type: ignore[import]
-from morl_behavior_objective.methods.behaviorencoder import (
-    BasicMLPEncoder,
-    BehaviorEncoderCLSattnSATyped,
-    BehaviorEncoderMLPBaseline,
-    BehaviorEncoderMLPDouble,
-    BehaviorEncoderMLPWithLocalTokens,
-    DeepInfoMaxLoss,
-    InstanceLoss,
-    TrajectoryDecoder,
-    PolicySetEncoder,
-    VarianceCovarianceLoss,
-)
-from morl_behavior_objective.methods.behaviorencoder_utils import (
-    apply_per_traj,
-    build_scaler,
-    fit_on_flat,
-    is_cont_actions,
-    prepare_sa_trajectories,
-    datasets_preparation_ret,
-    train_epoch,
-    train_epoch_no_norm,
-    set_train_epoch,
-    get_all_embeddings,
-    get_mean_policy_embeddings,
-    load_environment_data,
-    generate_experiment_name,
-    save_policy_latents_to_json,
-    visualize_policy_embeddings_with_lines,
-    visualize_trajectory_embeddings,
-    visualize_policy_embeddings,
-)
-import warnings
+
+from morl_behavior_objective.methods.behaviorencoder import BasicMLPEncoder
+from morl_behavior_objective.methods.behaviorencoder import BehaviorEncoderCLSattnSATyped
+from morl_behavior_objective.methods.behaviorencoder import BehaviorEncoderMLPBaseline
+from morl_behavior_objective.methods.behaviorencoder import DeepInfoMaxLoss
+from morl_behavior_objective.methods.behaviorencoder import InstanceLoss
+from morl_behavior_objective.methods.behaviorencoder import PolicySetEncoder
+from morl_behavior_objective.methods.behaviorencoder import TrajectoryDecoder
+from morl_behavior_objective.methods.behaviorencoder import VarianceCovarianceLoss
+from morl_behavior_objective.methods.behaviorencoder_utils import apply_per_traj
+from morl_behavior_objective.methods.behaviorencoder_utils import build_scaler
+from morl_behavior_objective.methods.behaviorencoder_utils import datasets_preparation_ret
+from morl_behavior_objective.methods.behaviorencoder_utils import fit_on_flat
+from morl_behavior_objective.methods.behaviorencoder_utils import generate_experiment_name
+from morl_behavior_objective.methods.behaviorencoder_utils import get_all_embeddings
+from morl_behavior_objective.methods.behaviorencoder_utils import get_mean_policy_embeddings
+from morl_behavior_objective.methods.behaviorencoder_utils import is_cont_actions
+from morl_behavior_objective.methods.behaviorencoder_utils import load_environment_data
+from morl_behavior_objective.methods.behaviorencoder_utils import prepare_sa_trajectories
+from morl_behavior_objective.methods.behaviorencoder_utils import save_policy_latents_to_json
+from morl_behavior_objective.methods.behaviorencoder_utils import set_train_epoch
+from morl_behavior_objective.methods.behaviorencoder_utils import train_epoch
+from morl_behavior_objective.methods.behaviorencoder_utils import visualize_policy_embeddings
+from morl_behavior_objective.methods.behaviorencoder_utils import visualize_policy_embeddings_with_lines
+from morl_behavior_objective.methods.behaviorencoder_utils import visualize_trajectory_embeddings
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-from sklearn.metrics import pairwise_distances
-from scipy.stats import spearmanr
-
-
 def check_for_leakage(encoder, loader, device):
-    """
-    Verify that the encoder doesn't have access to policy/return information.
-    
+    """Verify that the encoder doesn't have access to policy/return information.
+
     If there's NO leakage:
     - Shuffled policy assignments should give RANDOM structure
     - The actual structure should come from (s,a) patterns only
     """
     encoder.eval()
-    
+
     all_embeddings = []
     all_policies = []
     all_returns = []
-    
+
     with th.no_grad():
         for states, actions, masks, labels, returns in loader:
             states = states.to(device)
             actions = actions.to(device)
             masks = masks.to(device)
-            
+
             _, _, _, _, cls_emb, _ = encoder(states, actions, src_key_padding_mask=masks)
             all_embeddings.append(cls_emb.cpu().numpy())
             all_policies.extend(labels.numpy())
             all_returns.append(returns.numpy())
-    
+
     embeddings = np.vstack(all_embeddings)
     policies = np.array(all_policies)
     returns = np.vstack(all_returns)
-    
+
     print("\n" + "=" * 70)
     print("LEAKAGE CHECK")
     print("=" * 70)
-    
+
     # 1. Check: Does embedding distance correlate with policy distance?
     unique_pids = np.unique(policies)
     policy_emb = np.array([embeddings[policies == p].mean(0) for p in unique_pids])
     policy_ret = np.array([returns[policies == p][0] for p in unique_pids])
-    
+
     D_emb = pairwise_distances(policy_emb)
     D_ret = pairwise_distances(policy_ret)
-    
+
     triu = np.triu_indices(len(unique_pids), k=1)
     real_corr, _ = spearmanr(D_emb[triu], D_ret[triu])
-    
-    print(f"\n1. REAL DATA")
+
+    print("\n1. REAL DATA")
     print(f"   Embedding-Return correlation: {real_corr:.4f}")
-    
+
     # 2. Shuffle test: Randomly reassign policy labels
     # If structure comes from (s,a) patterns, shuffling labels shouldn't change embeddings
     # but SHOULD destroy the correlation with returns
-    
+
     shuffled_policies = policies.copy()
     np.random.shuffle(shuffled_policies)
-    
+
     shuffled_policy_emb = np.array([embeddings[shuffled_policies == p].mean(0) for p in unique_pids])
     shuffled_policy_ret = np.array([returns[shuffled_policies == p][0] for p in unique_pids])
-    
+
     D_shuf_emb = pairwise_distances(shuffled_policy_emb)
     D_shuf_ret = pairwise_distances(shuffled_policy_ret)
-    
+
     shuf_corr, _ = spearmanr(D_shuf_emb[triu], D_shuf_ret[triu])
-    
-    print(f"\n2. SHUFFLED LABELS (control)")
+
+    print("\n2. SHUFFLED LABELS (control)")
     print(f"   Embedding-Return correlation: {shuf_corr:.4f}")
-    
+
     # 3. Interpretation
-    print(f"\n3. INTERPRETATION")
+    print("\n3. INTERPRETATION")
     if abs(real_corr) > 0.3 and abs(shuf_corr) < 0.2:  # More lenient threshold
         print("   ✅ NO LEAKAGE DETECTED")
         print("   - Real correlation is significant")
@@ -133,47 +124,48 @@ def check_for_leakage(encoder, loader, device):
         print("   ❓ UNCLEAR - investigate further")
         print(f"   - Real: {real_corr:.4f}, Shuffled: {shuf_corr:.4f}")
         print(f"   - Difference: {abs(real_corr - shuf_corr):.4f}")
-        
-    
+
     # 4. Additional check: Intra-policy consistency
     # If embeddings capture policy structure, trajectories from same policy should cluster
     intra_dists = []
     inter_dists = []
-    
+
     for pid in unique_pids:
         same_policy = embeddings[policies == pid]
         diff_policy = embeddings[policies != pid]
-        
+
         if len(same_policy) > 1:
             intra = pairwise_distances(same_policy)
             intra_dists.extend(intra[np.triu_indices(len(same_policy), k=1)])
-        
+
         if len(same_policy) > 0 and len(diff_policy) > 0:
             inter = pairwise_distances(same_policy, diff_policy)
             inter_dists.extend(inter.flatten())
-    
-    print(f"\n4. CLUSTERING QUALITY")
+
+    print("\n4. CLUSTERING QUALITY")
     print(f"   Intra-policy distance (mean): {np.mean(intra_dists):.4f}")
     print(f"   Inter-policy distance (mean): {np.mean(inter_dists):.4f}")
     print(f"   Ratio (lower = better clustering): {np.mean(intra_dists) / np.mean(inter_dists):.4f}")
-    
+
     if np.mean(intra_dists) < np.mean(inter_dists):
         print("   ✅ Trajectories from same policy cluster together")
         print("   → Structure is real and comes from behavioral patterns")
     else:
         print("   ⚠️ No clear clustering by policy")
-    
+
     print("=" * 70)
-    
+
     return {
-        'real_corr': real_corr,
-        'shuffled_corr': shuf_corr,
-        'intra_dist': np.mean(intra_dists),
-        'inter_dist': np.mean(inter_dists),
+        "real_corr": real_corr,
+        "shuffled_corr": shuf_corr,
+        "intra_dist": np.mean(intra_dists),
+        "inter_dist": np.mean(inter_dists),
     }
+
 
 # ---------- Main Execution Block ----------
 def main():
+    """Parse CLI arguments and run the configured training/evaluation experiment."""
     parser = argparse.ArgumentParser()
     # Add all arguments from main_morl_BE.py for consistency
     arg_env = parser.add_argument_group("Environment Selection")
@@ -212,7 +204,9 @@ def main():
     )
 
     arg_method = parser.add_argument_group("Method Selection")
-    arg_method.add_argument('--use_mlp_baseline', action='store_true', help='Use MLP baseline instead of Transformer-based encoder')
+    arg_method.add_argument(
+        "--use_mlp_baseline", action="store_true", help="Use MLP baseline instead of Transformer-based encoder"
+    )
 
     arg_hyp = parser.add_argument_group("Training Hyperparameters")
     arg_hyp.add_argument(
@@ -286,11 +280,11 @@ def main():
         else "UNK"
     )
 
-    if env_code == "DSTC" or env_code == "DSTS" or env_code == "DSTLR" or env_code == "DSTL":
-        gaussian_m_state = 128 #18 stable
-        gaussian_m_action = 32 #not really used for discrete actions
+    if env_code in {"DSTC", "DSTS", "DSTLR", "DSTL"}:
+        gaussian_m_state = 128  # 18 stable
+        gaussian_m_action = 32  # not really used for discrete actions
         gaussian_sigma_state = 0.01
-        gaussian_sigma_action = 0.01 #not really used for discrete actions
+        gaussian_sigma_action = 0.01  # not really used for discrete actions
     elif env_code == "MHW":
         gaussian_m_state = 128
         gaussian_m_action = 32
@@ -307,13 +301,13 @@ def main():
     os.makedirs(args.model_dir, exist_ok=True)
 
     # --- Data Loading and Preparation (Refactored) ---
-    trajectories, true_labels, obj_feats_per_traj, env_id, name_env, num_policies, embeddings_folder_path = (
+    trajectories, true_labels, obj_feats_per_traj, env_id, _name_env, _num_policies, embeddings_folder_path = (
         load_environment_data(args)
     )
 
     # Get one return vector *per policy*
     policy_returns = {}
-    for label, ret in zip(true_labels, obj_feats_per_traj):
+    for label, ret in zip(true_labels, obj_feats_per_traj, strict=False):
         if label not in policy_returns:
             policy_returns[label] = ret
     # Sort by key to get a stable list
@@ -321,7 +315,7 @@ def main():
 
     all_states_raw = [t.obs for t in trajectories]
     all_actions_raw = [t.acts for t in trajectories]
-    is_discrete_acts = True if (trajectories[0].acts[0].shape[0] == 1) else False
+    is_discrete_acts = trajectories[0].acts[0].shape[0] == 1
 
     # --- Normalization ---
     if args.state_scaler != "none":
@@ -339,7 +333,8 @@ def main():
         all_actions_norm = all_actions_raw
 
     norm_trajectories = [
-        Trajectory(obs=s, acts=a, infos=None, terminal=True) for s, a in zip(all_states_norm, all_actions_norm)
+        Trajectory(obs=s, acts=a, infos=None, terminal=True)
+        for s, a in zip(all_states_norm, all_actions_norm, strict=False)
     ]
 
     # --- Dataset and DataLoader ---
@@ -347,7 +342,7 @@ def main():
         env_id, norm_trajectories, np.array(true_labels)
     )
 
-    full_dataset, _, _, _, loader, _, _, _ = datasets_preparation_ret(
+    _full_dataset, _, _, _, loader, _, _, _ = datasets_preparation_ret(
         all_states,
         all_actions,
         all_masks,
@@ -373,9 +368,9 @@ def main():
         # We flatten all trajectories to find the global max action ID
         all_acts_flat = np.concatenate([t.acts.flatten() for t in trajectories])
         vocab_size = int(all_acts_flat.max() + 1)
-        
-        num_actions = vocab_size      # For Encoder nn.Embedding
-        decoder_action_dim = vocab_size # For Decoder Output (Logits)
+
+        num_actions = vocab_size  # For Encoder nn.Embedding
+        decoder_action_dim = vocab_size  # For Decoder Output (Logits)
         print(f"Discrete Env detected. Vocab Size: {vocab_size}")
     else:
         # Continuous Case
@@ -403,7 +398,13 @@ def main():
             normalize_output_embeddings=normalize_cls,
         ).to(device)
     else:
-        baseline_model = BasicMLPEncoder if args.model_prefix == "basic" else BehaviorEncoderMLPBaseline if args.model_prefix == "mlp" else None
+        baseline_model = (
+            BasicMLPEncoder
+            if args.model_prefix == "basic"
+            else BehaviorEncoderMLPBaseline
+            if args.model_prefix == "mlp"
+            else None
+        )
         if baseline_model is None:
             raise ValueError(f"Unknown model prefix {args.model_prefix} for MLP baseline.")
         encoder = baseline_model(
@@ -460,15 +461,19 @@ def main():
                 segment_weight=args.segment_weight,
                 env_id=env_id,
                 cls_norm=normalize_cls,
-                vc_weight=0.05
+                vc_weight=0.05,
             )
             pbar.set_description(f"Epoch {epoch + 1}/{args.epochs} | Loss: {loss:.4f}")
             if epoch == 0:
                 best_loss = loss
                 # best_model_path = model_path.replace(".pt", "_best.pt")
-                
+
                 th.save(
-                    {"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()},
+                    {
+                        "encoder": encoder.state_dict(),
+                        "decoder": decoder.state_dict(),
+                        "dim_disc": dim_loss_fn.state_dict(),
+                    },
                     model_path,
                 )
                 pbar.set_postfix(best_loss=f"{best_loss:.4f}")
@@ -476,7 +481,11 @@ def main():
                 best_loss = loss
                 best_epoch = epoch + 1
                 th.save(
-                    {"encoder": encoder.state_dict(), "decoder": decoder.state_dict(), "dim_disc": dim_loss_fn.state_dict()},
+                    {
+                        "encoder": encoder.state_dict(),
+                        "decoder": decoder.state_dict(),
+                        "dim_disc": dim_loss_fn.state_dict(),
+                    },
                     model_path,
                 )
                 pbar.set_postfix(best_loss=f"{best_loss:.4f}")
@@ -501,11 +510,11 @@ def main():
     avg_norm = norms.mean()
     min_norm = norms.min()
     max_norm = norms.max()
-    print(f"\n--- NORMALIZATION CHECK ---")
+    print("\n--- NORMALIZATION CHECK ---")
     print(f"Average Norm: {avg_norm:.4f} (Should be ~1.0)")
     print(f"Min Norm:     {min_norm:.4f}")
     print(f"Max Norm:     {max_norm:.4f}")
-    print(f"---------------------------\n")
+    print("---------------------------\n")
 
     unique = np.unique(policies)
     # per-policy mean and adjacent distances
@@ -669,44 +678,44 @@ def main():
     # -----------------------------------------------------------------
     print("\n" + "-" * 30)
     print("--- Computing ZADU Metrics: Returns vs Embeddings ---")
-    
+
     from morl_behavior_objective.analysis.metrics_clean import compute_zadu_metrics
-    
+
     # Get policy-level data in consistent order
     pids_ordered = sorted(mean_policy_latents.keys())
-    
+
     # Build returns matrix (one return vector per policy)
     returns_matrix = np.array([obj_feats_per_policy[pid] for pid in pids_ordered])
     mean_emb_matrix = np.array([mean_policy_latents[pid] for pid in pids_ordered])
-    
+
     n_policies = len(pids_ordered)
     k_zadu = min(2, n_policies - 1)  # ZADU k parameter, at least 1 neighbor
-    
+
     if n_policies >= 3:
         # Compute metrics: Returns -> Mean Embeddings
         zadu_results = compute_zadu_metrics(returns_matrix, mean_emb_matrix, k=k_zadu)
-        
+
         print(f"ZADU Metrics (k={k_zadu}):")
-        print(f"  Returns vs Mean Embeddings:")
+        print("  Returns vs Mean Embeddings:")
         print(f"    Trustworthiness: {zadu_results[0]['trustworthiness']:.4f}")
         print(f"    Continuity:      {zadu_results[0]['continuity']:.4f}")
         print(f"    MRRE (false):    {zadu_results[1]['mrre_false']:.4f}")
         print(f"    MRRE (missing):  {zadu_results[1]['mrre_missing']:.4f}")
-        
+
         # If set encoder was used, also compare returns vs learned embeddings
         if args.use_set_encoder and learned_policy_latents:
             learned_emb_matrix = np.array([learned_policy_latents[pid] for pid in pids_ordered])
             zadu_results_learned = compute_zadu_metrics(returns_matrix, learned_emb_matrix, k=k_zadu)
-            
-            print(f"  Returns vs Learned Embeddings:")
+
+            print("  Returns vs Learned Embeddings:")
             print(f"    Trustworthiness: {zadu_results_learned[0]['trustworthiness']:.4f}")
             print(f"    Continuity:      {zadu_results_learned[0]['continuity']:.4f}")
             print(f"    MRRE (false):    {zadu_results_learned[1]['mrre_false']:.4f}")
             print(f"    MRRE (missing):  {zadu_results_learned[1]['mrre_missing']:.4f}")
     else:
         print(f"Not enough policies ({n_policies}) to compute ZADU metrics. Need at least 3.")
-    
-    print("--- ZADU Metrics Complete ---")   
+
+    print("--- ZADU Metrics Complete ---")
 
     # -----------------------------------------------------------------
     # --- Compare Mean vs. Learned Embeddings ---
@@ -757,6 +766,7 @@ def main():
     leakage_results = check_for_leakage(encoder, loader, device)
     print(leakage_results)
     print("--- Leakage Check Complete ---")
+
 
 if __name__ == "__main__":
     main()

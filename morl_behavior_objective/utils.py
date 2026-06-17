@@ -1,3 +1,5 @@
+"""Shared helpers for loading Pareto fronts, rendering policies, and plotting results."""
+
 import json
 import os
 
@@ -53,9 +55,7 @@ def create_ground_truth_dst(trajectory_path: str) -> npt.NDArray:
     n_down = actions.count(1)
     n_up = actions.count(0)
 
-    emb_gt = np.array([n_right - n_left, n_down - n_up])
-
-    return emb_gt
+    return np.array([n_right - n_left, n_down - n_up])
 
 
 def load_ground_truth_data(
@@ -136,40 +136,9 @@ def get_pareto_front(directory_path: str) -> npt.NDArray:
     for i in range(num_files):
         returns_i = get_returns(os.path.join(directory_path, f"policy_{i}.json"))
         pareto_front.append(returns_i)
-    pareto_front = np.array(pareto_front)
-    return pareto_front
+    return np.array(pareto_front)
 
 
-def visualize_pareto_front(pareto_front: npt.NDArray) -> None:
-    """Visualize the Pareto front.
-
-    Args:
-        pareto_front (npt.NDArray): Array of objectives in the Pareto front.
-    """
-    import matplotlib.pyplot as plt
-
-    plt.figure()
-    if pareto_front.shape[1] == 2:
-        plt.scatter(pareto_front[:, 0], pareto_front[:, 1], c="blue")
-        plt.xlabel("Objective 1")
-        plt.ylabel("Objective 2")
-        plt.title("Pareto Front")
-        plt.grid()
-        plt.show()
-    elif pareto_front.shape[1] == 3:
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection="3d")
-        ax.scatter(pareto_front[:, 0], pareto_front[:, 1], pareto_front[:, 2], c="blue")
-        ax.set_xlabel("Objective 1")
-        ax.set_ylabel("Objective 2")
-        ax.set_zlabel("Objective 3")
-        ax.set_title("Pareto Front")
-        plt.show()
-    else:
-        print("Visualization only supported for 2D or 3D objectives.")
-
-
-# ...existing code...
 def visualize_pareto_front(
     pareto_front: npt.NDArray, use_plotly: bool = True, save_html: str | None = None, show: bool = True
 ):
@@ -194,53 +163,53 @@ def visualize_pareto_front(
     n = pf.shape[0]
     indices = np.arange(n)
 
+    px = None
     if use_plotly:
         try:
             import plotly.express as px
+        except ImportError:
+            px = None
 
-            if pf.shape[1] == 2:
-                x = pf[:, 0]
-                y = pf[:, 1]
-                hover = [f"idx: {i}<br>({x[i]:.3f}, {y[i]:.3f})" for i in indices]
-                fig = px.scatter(
-                    x=x,
-                    y=y,
-                    text=[str(i) for i in indices],
-                    labels={"x": "Objective 1", "y": "Objective 2"},
-                    title="Pareto Front (2D)",
-                )
-                fig.update_traces(
-                    marker=dict(size=7), hovertemplate="%{customdata}", customdata=hover, textposition="top center"
-                )
+    if px is not None:
+        if pf.shape[1] == 2:
+            x = pf[:, 0]
+            y = pf[:, 1]
+            hover = [f"idx: {i}<br>({x[i]:.3f}, {y[i]:.3f})" for i in indices]
+            fig = px.scatter(
+                x=x,
+                y=y,
+                text=[str(i) for i in indices],
+                labels={"x": "Objective 1", "y": "Objective 2"},
+                title="Pareto Front (2D)",
+            )
+            fig.update_traces(
+                marker={"size": 7}, hovertemplate="%{customdata}", customdata=hover, textposition="top center"
+            )
 
-            else:
-                x = pf[:, 0]
-                y = pf[:, 1]
-                z = pf[:, 2]
-                hover = [f"idx: {i}<br>({x[i]:.3f}, {y[i]:.3f}, {z[i]:.3f})" for i in indices]
-                fig = px.scatter_3d(
-                    x=x,
-                    y=y,
-                    z=z,
-                    text=[str(i) for i in indices],
-                    labels={"x": "Objective 1", "y": "Objective 2", "z": "Objective 3"},
-                    title="Pareto Front (3D)",
-                )
-                fig.update_traces(marker=dict(size=4), hovertemplate="%{customdata}", customdata=hover)
+        else:
+            x = pf[:, 0]
+            y = pf[:, 1]
+            z = pf[:, 2]
+            hover = [f"idx: {i}<br>({x[i]:.3f}, {y[i]:.3f}, {z[i]:.3f})" for i in indices]
+            fig = px.scatter_3d(
+                x=x,
+                y=y,
+                z=z,
+                text=[str(i) for i in indices],
+                labels={"x": "Objective 1", "y": "Objective 2", "z": "Objective 3"},
+                title="Pareto Front (3D)",
+            )
+            fig.update_traces(marker={"size": 4}, hovertemplate="%{customdata}", customdata=hover)
 
-            if save_html:
-                try:
-                    fig.write_html(save_html)
-                except Exception as e:
-                    print(f"Warning: failed to write html {save_html}: {e}")
+        if save_html:
+            try:
+                fig.write_html(save_html)
+            except OSError as e:
+                print(f"Warning: failed to write html {save_html}: {e}")
 
-            if show:
-                fig.show()
-            return fig
-
-        except Exception:
-            # Plotly not available or failed — fall back to matplotlib
-            pass
+        if show:
+            fig.show()
+        return fig
 
     # Matplotlib fallback
     import matplotlib.pyplot as plt
@@ -271,12 +240,6 @@ def visualize_pareto_front(
         plt.show()
     return fig
 
-
-import os
-import numpy as np
-import imageio
-import mo_gymnasium as mo_gym
-from gymnasium.wrappers import TimeLimit, FlattenObservation
 
 def render_policy(
     env_id: str, check_point: str, policy_id: int, n_episodes: int, save_dic=None, fps=30, base_path: str = "."
@@ -335,14 +298,12 @@ def render_policy(
             except TypeError:
                 action = pol.wrapped.eval(obs)
 
-            obs, reward, terminated, truncated, info = env.step(action)
+            obs, _reward, terminated, truncated, _info = env.step(action)
 
         if save_dic is not None:
-            path = os.path.join(save_dic, f"{env_id}_policy_{policy_id}_ep_{episode}.mp4") 
-            imageio.mimsave(path, frames, fps=fps, codec='libx264')   
+            path = os.path.join(save_dic, f"{env_id}_policy_{policy_id}_ep_{episode}.mp4")
+            imageio.mimsave(path, frames, fps=fps, codec="libx264")
     env.close()
-
-
 
 
 if __name__ == "__main__":

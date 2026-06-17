@@ -1,30 +1,30 @@
-import os
+import argparse
 import json
+import os
+
 from imitation.data.types import Trajectory  # type: ignore[import]
 import matplotlib.pyplot as plt  # type: ignore[import]
 import numpy as np  # type: ignore[import]
 import seaborn as sns  # type: ignore[import]
-from sklearn.preprocessing import (
-    MaxAbsScaler,
-    MinMaxScaler,
-    Normalizer,
-    PowerTransformer,
-    QuantileTransformer,
-    RobustScaler,
-    StandardScaler,
-)  # type: ignore[import]
+from sklearn.preprocessing import MaxAbsScaler  # type: ignore[import]
+from sklearn.preprocessing import MinMaxScaler  # type: ignore[import]
+from sklearn.preprocessing import Normalizer  # type: ignore[import]
+from sklearn.preprocessing import PowerTransformer  # type: ignore[import]
+from sklearn.preprocessing import QuantileTransformer  # type: ignore[import]
+from sklearn.preprocessing import RobustScaler  # type: ignore[import]
+from sklearn.preprocessing import StandardScaler  # type: ignore[import]
 import torch as th  # type: ignore[import]
 from torch import nn  # type: ignore[import]
 import torch.nn.functional as F  # type: ignore[import]
-from torch.utils.data import TensorDataset, DataLoader, random_split  # type: ignore[import]
 from torch.utils.data import DataLoader  # type: ignore[import]
+from torch.utils.data import random_split  # type: ignore[import]
+from torch.utils.data import TensorDataset  # type: ignore[import]
 from tqdm import tqdm  # type: ignore[import]
 import umap  # type: ignore[import]
 
-from .behaviorencoder import *
-from typing import List, Dict
-import argparse
-from sklearn.metrics.pairwise import cosine_similarity  # type: ignore[import]
+from .behaviorencoder import DeepInfoMaxLoss
+from .behaviorencoder import InstanceLoss
+from .behaviorencoder import PolicySetEncoder
 
 
 def prepare_sa_trajectories(
@@ -57,7 +57,6 @@ def prepare_sa_trajectories(
         return th.empty(0), th.empty(0), th.empty(0), th.empty(0)
 
     max_len = max(len(traj.obs) for traj in trajectories)
-    min_len = min(len(traj.obs) for traj in trajectories)
 
     # Define ending_state based on env_id
     ending_state = None
@@ -66,13 +65,12 @@ def prepare_sa_trajectories(
     first_traj = trajectories[0]
     state_shape = np.array(first_traj.obs).shape[1:]
     state_dtype = th.float32
-    action_dtype = th.int64
 
     num_trajs = len(trajectories)
     all_states = th.zeros((num_trajs, max_len, *state_shape), dtype=state_dtype)
     # all_actions = th.zeros((num_trajs, max_len), dtype=action_dtype)
     first_act = np.array(trajectories[0].acts)
-    if first_act.ndim == 0 or first_act.ndim == 1:
+    if first_act.ndim in {0, 1}:
         # discrete: shape (L,) ints
         discrete = True
         action_dim = 1
@@ -179,8 +177,7 @@ def expand_interleaved_mask(original_mask: th.Tensor) -> th.Tensor:
     """
     B, T = original_mask.shape
     # Repeat each mask element twice (for state and action)
-    interleaved_mask = original_mask.unsqueeze(-1).repeat(1, 1, 2).view(B, 2 * T)
-    return interleaved_mask
+    return original_mask.unsqueeze(-1).repeat(1, 1, 2).view(B, 2 * T)
 
 
 def segment_contrastive_loss(
@@ -192,7 +189,7 @@ def segment_contrastive_loss(
     L: int,
     num_segments: int = 2,
     pairwise_segments: bool = False,
-    contrastive_loss_fn: nn.Module = InstanceLoss(0.5, device=th.device("cpu")),
+    contrastive_loss_fn: nn.Module | None = None,
 ):
     """Global-vs-Segment contrastive loss.
     Contrasts the CLS embedding of the full trajectory against the CLS embeddings
@@ -209,7 +206,10 @@ def segment_contrastive_loss(
       loss: A scalar contrastive loss.
       z_segs: Embeddings of the segments for potential MI loss calculation.
     """
-    B, T, _ = states.shape
+    if contrastive_loss_fn is None:
+        contrastive_loss_fn = InstanceLoss(0.5, device=th.device("cpu"))
+
+    B, _T, _ = states.shape
     device = states.device
 
     # 1) Calculate valid lengths and sample start indices for two segments
@@ -331,11 +331,9 @@ def datasets_preparation_ret(
     seed,
     returns=None,
 ):
-    """
-    Prepares datasets and DataLoaders for training, validation, and testing,
+    """Prepares datasets and DataLoaders for training, validation, and testing,
     including trajectory returns.
     """
-
     # Ensure returns are provided and have the correct length
     if returns is None or len(returns) != len(all_states):
         raise ValueError("Returns must be provided and match the number of trajectories.")
@@ -363,9 +361,7 @@ def datasets_preparation_ret(
 
 
 def extract_scalar_returns(returns):
-    """
-    Extracts a single scalar value from various return formats.
-    """
+    """Extracts a single scalar value from various return formats."""
     values = []
     for ret in returns:
         if ret is None:
@@ -402,8 +398,7 @@ def loss_vol_simplified(z_normalized):
 
 
 def decorrelation_loss(z):
-    """
-    Encourages different dimensions of the embeddings to be uncorrelated.
+    """Encourages different dimensions of the embeddings to be uncorrelated.
     Assumes z is centered (mean=0) across the batch.
     """
     # z shape: [B, emb_dim]
@@ -413,8 +408,7 @@ def decorrelation_loss(z):
     # We want the off-diagonal elements to be zero.
     # Penalize the sum of the squares of the off-diagonal elements.
     off_diag_mask = ~th.eye(z.shape[1], dtype=th.bool, device=z.device)
-    loss = cov_matrix[off_diag_mask].pow(2).sum() / z.shape[1]
-    return loss
+    return cov_matrix[off_diag_mask].pow(2).sum() / z.shape[1]
 
 
 def segment_contrastive_loss_no_t(
@@ -428,12 +422,11 @@ def segment_contrastive_loss_no_t(
     num_segments: int = 2,
     pairwise_segments: bool = False,
 ):
-    """
-    Global-vs-Segment contrastive loss.
+    """Global-vs-Segment contrastive loss.
     Contrasts the CLS embedding of the full trajectory against the CLS embeddings
     of num_segments random segments of length L from that same trajectory.
     """
-    B, T, _ = states.shape
+    B, _T, _ = states.shape
     device = states.device
 
     # 1) Calculate valid lengths and sample start indices
@@ -490,9 +483,7 @@ def segment_contrastive_loss_no_t(
                 pairs += 1
         loss_pairwise = loss_pairwise / float(pairs) if pairs > 0 else 0.0
 
-    loss = loss_full_vs_segs + loss_pairwise
-    return loss
-
+    return loss_full_vs_segs + loss_pairwise
 
 
 def train_epoch(
@@ -510,7 +501,7 @@ def train_epoch(
     segment_weight,
     vc_weight,
     env_id=None,
-    cls_norm=True
+    cls_norm=True,
 ):
     encoder.train()
     decoder.train()
@@ -518,16 +509,12 @@ def train_epoch(
     total_loss = 0.0
 
     # Check if encoder is MLP baseline (no CLS token in output)
-    is_mlp_baseline = hasattr(encoder, 'model_type') and "MLP" in encoder.model_type
+    is_mlp_baseline = hasattr(encoder, "model_type") and "MLP" in encoder.model_type
 
-
-    for states, actions, masks, _, returns in loader:
+    for states, actions, masks, _, _returns in loader:
         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
 
-        if actions[0][0].shape[0] == 1:
-            discrete_actions = True
-        else:
-            discrete_actions = False
+        discrete_actions = actions[0][0].shape[0] == 1
 
         # --- Two stochastic forward passes for contrastive learning ---
         all_tokens1, _, _, _, cls_emb1_raw, _ = encoder(states, actions, src_key_padding_mask=masks)
@@ -555,7 +542,7 @@ def train_epoch(
         rec_action_loss = 0.0
         total_valid_steps = 0
         B = states.size(0)
-        if recon_weight > 0.0:    
+        if recon_weight > 0.0:
             B = states.size(0)
             for b in range(B):
                 valid_len = int(valid_lengths[b].item())
@@ -568,7 +555,7 @@ def train_epoch(
                     # For discrete actions, use one-hot encoding for reconstruction loss
                     act_logits = actions_rec[b, :valid_len]
                     act_targets = actions[b, :valid_len].long().squeeze(-1)
-                    rec_action_loss += F.cross_entropy(act_logits, act_targets, reduction='sum')
+                    rec_action_loss += F.cross_entropy(act_logits, act_targets, reduction="sum")
                     # print(f"Batch {b}, rec_action_loss: {rec_action_loss}")
                 else:
                     rec_action_loss += (actions_rec[b, :valid_len] - actions[b, :valid_len]).pow(2).sum()
@@ -583,10 +570,7 @@ def train_epoch(
             recon_loss = th.tensor(0.0, device=device)
 
         # --- CORRECTED InfoNCE Loss ---
-        if info_weight > 0.0:
-            info_loss = info_loss_fn(cls_emb1, cls_emb2)
-        else:
-            info_loss = th.tensor(0.0, device=device)
+        info_loss = info_loss_fn(cls_emb1, cls_emb2) if info_weight > 0.0 else th.tensor(0.0, device=device)
 
         # --- Deep InfoMax Loss (averaged over both views) ---
         interleaved_mask = expand_interleaved_mask(masks)
@@ -597,7 +581,7 @@ def train_epoch(
                 # Shape is [B, 2*T, D], mask is [B, 2*T]
                 local_tokens1 = all_tokens1
                 local_tokens2 = all_tokens2
-                #for MLPT
+                # for MLPT
                 num_tokens = local_tokens1.shape[1]  # 2*num_local_tokens
                 interleaved_mask = th.zeros(B, num_tokens, dtype=th.bool, device=device)
             else:
@@ -612,26 +596,39 @@ def train_epoch(
             dim_loss = th.tensor(0.0, device=device)
 
         # --- Segment Contrastive Loss ---
-        seg_loss = th.tensor(0.0, device=device)
+        th.tensor(0.0, device=device)
         if segment_weight > 0.0:
             # Define segment length L based on environment
             L_min, L_max = (1, 4) if "dst" in env_id or "sea" in env_id else (8, 16)
             T = states.shape[1]
             current_L_max = min(L_max, T - 1)
             L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
-            loss_seg_1 = segment_contrastive_loss(cls_emb1, encoder, states, actions, masks, L=L,
-                                                 contrastive_loss_fn=info_loss_fn, num_segments=4,
-                                                    pairwise_segments=True)[0]
-            loss_seg_2 = segment_contrastive_loss(cls_emb2, encoder, states, actions, masks, L=L,
-                                                 contrastive_loss_fn=info_loss_fn, num_segments=4,
-                                                pairwise_segments=True)[0]
+            loss_seg_1 = segment_contrastive_loss(
+                cls_emb1,
+                encoder,
+                states,
+                actions,
+                masks,
+                L=L,
+                contrastive_loss_fn=info_loss_fn,
+                num_segments=4,
+                pairwise_segments=True,
+            )[0]
+            loss_seg_2 = segment_contrastive_loss(
+                cls_emb2,
+                encoder,
+                states,
+                actions,
+                masks,
+                L=L,
+                contrastive_loss_fn=info_loss_fn,
+                num_segments=4,
+                pairwise_segments=True,
+            )[0]
             loss_seg = (loss_seg_1 + loss_seg_2) / 2.0
 
         # vc_reg = (vc_loss_fn(cls_emb1_raw) + vc_loss_fn(cls_emb2_raw)) / 2.0
-        if vc_weight > 0.0:
-            vc_reg = vc_loss_fn(cls_emb1_raw)
-        else:
-            vc_reg = th.tensor(0.0, device=device)
+        vc_reg = vc_loss_fn(cls_emb1_raw) if vc_weight > 0.0 else th.tensor(0.0, device=device)
 
         # --- Total Weighted Loss ---
         loss = (
@@ -652,6 +649,7 @@ def train_epoch(
 
     return total_loss / max(len(loader), 1)
 
+
 def train_epoch_vicreg_only(
     encoder,
     decoder,  # Kept for API compatibility, but not used
@@ -659,13 +657,13 @@ def train_epoch_vicreg_only(
     optim,
     device,
     info_loss_fn,  # Kept for API compatibility, but not used
-    dim_loss_fn,   # Kept for API compatibility, but not used
-    vc_loss_fn,    # Kept for API compatibility, but not used
+    dim_loss_fn,  # Kept for API compatibility, but not used
+    vc_loss_fn,  # Kept for API compatibility, but not used
     recon_weight,  # Ignored
-    info_weight,   # Ignored
-    dim_weight,    # Ignored
+    info_weight,  # Ignored
+    dim_weight,  # Ignored
     segment_weight=0.0,  # Ignored
-    env_id=None,   # Kept for API compatibility
+    env_id=None,  # Kept for API compatibility
     vc_weight=0.05,  # Ignored - we use VICReg weights instead
     cls_norm=True,  # Ignored - VICReg needs unnormalized embeddings
     # VICReg specific weights
@@ -673,11 +671,10 @@ def train_epoch_vicreg_only(
     vicreg_var_weight: float = 50.0,
     vicreg_cov_weight: float = 5.0,
 ):
-    """
-    Training epoch using ONLY VICReg loss (Invariance + Variance + Covariance).
-    
+    """Training epoch using ONLY VICReg loss (Invariance + Variance + Covariance).
+
     The two forward passes with dropout act as the two "augmented views".
-    
+
     Args:
         encoder: The behavior encoder model
         decoder: Not used, kept for API compatibility
@@ -697,7 +694,7 @@ def train_epoch_vicreg_only(
         vicreg_inv_weight: Weight for invariance loss (default: 25.0)
         vicreg_var_weight: Weight for variance loss (default: 25.0)
         vicreg_cov_weight: Weight for covariance loss (default: 1.0)
-        
+
     Returns:
         avg_loss: Average loss over the epoch
     """
@@ -708,17 +705,17 @@ def train_epoch_vicreg_only(
     total_cov = 0.0
     total_info = 0.0
     num_batches = 0
-    
+
     eps = 1e-4
 
-    for states, actions, masks, _, returns in loader:
+    for states, actions, masks, _, _returns in loader:
         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
         num_batches += 1
 
         # --- Two stochastic forward passes (dropout creates two "views") ---
         _, _, _, _, cls_emb1_raw, _ = encoder(states, actions, src_key_padding_mask=masks)
         _, _, _, _, cls_emb2_raw, _ = encoder(states, actions, src_key_padding_mask=masks)
-        
+
         # VICReg operates on RAW (unnormalized) embeddings
         z1 = cls_emb1_raw
         z2 = cls_emb2_raw
@@ -746,37 +743,36 @@ def train_epoch_vicreg_only(
         off_diag_mask = ~th.eye(D, dtype=th.bool, device=z1.device)
         cov_loss = (cov_z1[off_diag_mask].pow(2).sum() + cov_z2[off_diag_mask].pow(2).sum()) / D
 
-        #InfoNCE loss l2 normalize embeddings
+        # InfoNCE loss l2 normalize embeddings
         z1_norm = F.normalize(z1, dim=1)
         z2_norm = F.normalize(z2, dim=1)
         info_loss = info_loss_fn(z1_norm, z2_norm)
 
         # === Total Loss ===
         loss = (
-            vicreg_inv_weight * inv_loss +
-            vicreg_var_weight * var_loss +
-            vicreg_cov_weight * cov_loss +
-            info_weight * info_loss
+            vicreg_inv_weight * inv_loss
+            + vicreg_var_weight * var_loss
+            + vicreg_cov_weight * cov_loss
+            + info_weight * info_loss
         )
 
         optim.zero_grad()
         loss.backward()
         th.nn.utils.clip_grad_norm_(encoder.parameters(), 1.0)
         optim.step()
-        
+
         total_loss += loss.item()
         total_inv += inv_loss.item()
         total_var += var_loss.item()
         total_cov += cov_loss.item()
         total_info += info_loss.item()
 
-    avg_loss = total_loss / max(num_batches, 1)
-    
+    return total_loss / max(num_batches, 1)
+
     # Optional: Print breakdown every epoch
     # print(f"  VICReg breakdown - Inv: {total_inv/num_batches:.4f}, "
     #       f"Var: {total_var/num_batches:.4f}, Cov: {total_cov/num_batches:.4f}")
 
-    return avg_loss
 
 def train_epoch_no_norm(
     encoder,
@@ -792,8 +788,7 @@ def train_epoch_no_norm(
     segment_weight=0.0,
     env_id=None,
 ):  # Removed vol_weight, decorr_weight, least_volumes
-    """
-    Training epoch that assumes the encoder outputs are NOT normalized.
+    """Training epoch that assumes the encoder outputs are NOT normalized.
     Normalization is applied selectively for losses that require it.
     """
     encoder.train()
@@ -801,7 +796,7 @@ def train_epoch_no_norm(
     dim_loss_fn.train()
     total_loss = 0.0
 
-    for states, actions, masks, _, returns in loader:
+    for states, actions, masks, _, _returns in loader:
         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
 
         # --- Two stochastic forward passes for contrastive learning ---
@@ -847,7 +842,7 @@ def train_epoch_no_norm(
             L_min, L_max = (4, 12) if "dst" in env_id or "sea" in env_id else (8, 16)
             T = states.shape[1]
             current_L_max = min(L_max, T - 1)
-            L = th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
+            th.randint(L_min, current_L_max + 1, (1,)).item() if current_L_max >= L_min else L_min
 
         # --- Total Weighted Loss ---
         loss = recon_weight * recon_loss + info_weight * info_loss + dim_weight * dim_loss + segment_weight * seg_loss
@@ -864,16 +859,14 @@ def train_epoch_no_norm(
 
 def set_train_epoch(
     set_encoder: PolicySetEncoder,
-    policy_data: Dict,
+    policy_data: dict,
     set_optim: th.optim.Optimizer,
     info_loss_fn_set: InstanceLoss,
     dim_loss_fn_set: DeepInfoMaxLoss,
     set_info_weight: float,
     set_dim_weight: float,
-) -> Tuple[float, float, float]:
-    """
-    Performs a single training epoch for the PolicySetEncoder.
-    """
+) -> tuple[float, float, float]:
+    """Performs a single training epoch for the PolicySetEncoder."""
     set_encoder.train()
     dim_loss_fn_set.train()
     set_optim.zero_grad()
@@ -959,7 +952,7 @@ def get_all_embeddings(encoder, loader, device):
     all_cls_embs, all_policies = [], []
     for states, actions, masks, labels, _ in loader:
         states, actions, masks = states.to(device), actions.to(device), masks.to(device)
-        all_tokens, _, _, _, cls_emb, _ = encoder(states, actions, src_key_padding_mask=masks)
+        _all_tokens, _, _, _, cls_emb, _ = encoder(states, actions, src_key_padding_mask=masks)
         all_cls_embs.append(cls_emb.cpu().numpy())
         all_policies.extend(labels.tolist())
     return np.vstack(all_cls_embs), np.array(all_policies)
@@ -1037,11 +1030,12 @@ def visualize_trajectory_embeddings(
 
 
 def visualize_policy_embeddings(
-    policy_latents: Dict[int, np.ndarray], emb_dim: int, title: str = "Aggregated Policy Embeddings", save_path: str = None
+    policy_latents: dict[int, np.ndarray],
+    emb_dim: int,
+    title: str = "Aggregated Policy Embeddings",
+    save_path: str | None = None,
 ):
-    """
-    Visualizes a dictionary of aggregated policy embeddings.
-    """
+    """Visualizes a dictionary of aggregated policy embeddings."""
     if emb_dim < 2:
         print(f"Embedding dimension < 2; skipping visualization for '{title}'.")
         return
@@ -1107,11 +1101,12 @@ def visualize_policy_embeddings(
 
 
 def visualize_policy_embeddings_with_lines(
-    policy_latents: Dict[int, np.ndarray], emb_dim: int, title: str = "Aggregated Policy Embeddings", save_path: str = None
+    policy_latents: dict[int, np.ndarray],
+    emb_dim: int,
+    title: str = "Aggregated Policy Embeddings",
+    save_path: str | None = None,
 ):
-    """
-    Visualizes a dictionary of aggregated policy embeddings with CONNECTING LINES.
-    """
+    """Visualizes a dictionary of aggregated policy embeddings with CONNECTING LINES."""
     if emb_dim < 2:
         print(f"Embedding dimension < 2; skipping visualization for '{title}'.")
         return
@@ -1211,9 +1206,8 @@ def visualize_policy_embeddings_with_lines(
     plt.close()
 
 
-def get_mean_policy_embeddings(embeddings: np.ndarray, policies: np.ndarray) -> Dict[int, np.ndarray]:
-    """
-    Aggregates policy embeddings by *mean*.
+def get_mean_policy_embeddings(embeddings: np.ndarray, policies: np.ndarray) -> dict[int, np.ndarray]:
+    """Aggregates policy embeddings by *mean*.
     Returns a dictionary of the mean embeddings.
     """
     policy_latents = {}
@@ -1223,9 +1217,8 @@ def get_mean_policy_embeddings(embeddings: np.ndarray, policies: np.ndarray) -> 
     return policy_latents
 
 
-def load_environment_data(args: argparse.Namespace) -> Tuple:
-    """
-    Loads trajectories, labels, and objective features based on args.
+def load_environment_data(args: argparse.Namespace) -> tuple:
+    """Loads trajectories, labels, and objective features based on args.
     Assumes all envs use 'policy_{id}.json' naming.
     """
     trajectories, true_labels, obj_feats_list = [], [], []
@@ -1258,7 +1251,7 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
     elif args.MOHalfCheetah:
         name_env = "mo-halfcheetah-v5"
         num_policies = (
-            80 #if args.seed == 0 else 99 if args.seed == 1 else 92 if args.seed == 2 else 103 if args.seed == 3 else 93
+            80  # if args.seed == 0 else 99 if args.seed == 1 else 92 if args.seed == 2 else 103 if args.seed == 3 else 93
         )
         env_id = "mo-halfcheetah-v5"
         base_trajectories_path = f"trajectories/morld/{name_env}/"
@@ -1266,23 +1259,21 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
     elif args.MOHighway:
         name_env = "mo-highway-fast-v0"
         num_policies = (
-            41 #if args.seed == 0 else 41 if args.seed == 1 else 40 if args.seed == 2 else 43 if args.seed == 3 else 51
+            41  # if args.seed == 0 else 41 if args.seed == 1 else 40 if args.seed == 2 else 43 if args.seed == 3 else 51
         )
         env_id = "mo-highway-fast-v0"
         base_trajectories_path = f"trajectories/morld/{name_env}/"  # Highway's base path
         is_seeded_env = True
     elif args.MOHopper:
         name_env = "mo-hopper-v5"
-        num_policies = (
-            160 #if args.seed == 0 else 157 if args.seed == 1 else 144 if args.seed == 2 else 182 if args.seed == 3 else 203
-        )
+        num_policies = 160  # if args.seed == 0 else 157 if args.seed == 1 else 144 if args.seed == 2 else 182 if args.seed == 3 else 203
         env_id = "mo-hopper-v5"
         base_trajectories_path = f"trajectories/morld/{name_env}/"
         is_seeded_env = True
     elif args.MOHopper2obj:
         name_env = "mo-hopper-2obj-v5"
         num_policies = (
-            35 #if args.seed == 0 else 26 if args.seed == 1 else 32 if args.seed == 2 else 24 if args.seed == 3 else 25
+            35  # if args.seed == 0 else 26 if args.seed == 1 else 32 if args.seed == 2 else 24 if args.seed == 3 else 25
         )
         env_id = "mo-hopper-2obj-v5"
         base_trajectories_path = f"trajectories/morld/{name_env}/"
@@ -1299,11 +1290,8 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
     # --- 2. Define specific paths for loading and saving ---
 
     # Path to load trajectories from (e.g., .../seed0/)
-    if is_seeded_env:
-        # trajectories_directory_path = os.path.join(base_trajectories_path, f"seed{args.seed}")
-        trajectories_directory_path = os.path.join(base_trajectories_path, f"seed0") # using only seed0 trajectories we can evaluate policies over different transformers
-    else:
-        trajectories_directory_path = base_trajectories_path
+    # Use only seed0 trajectories so policies can be evaluated across different transformers.
+    trajectories_directory_path = os.path.join(base_trajectories_path, "seed0") if is_seeded_env else base_trajectories_path
 
     # Path to save embeddings to (e.g., .../embeddings/)
     # This now correctly uses the base path, so it's a sibling to seed{s}
@@ -1320,7 +1308,7 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
             print(f"Warning: File not found {file_path}")
             continue
 
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             data = json.load(f)
         ret_vec = data.get("return", None)
 
@@ -1334,12 +1322,9 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
             loaded_trajectories = data["trajectories"]
 
         for states, actions in loaded_trajectories:
-            obs = np.array(list(states) + [states[-1]], dtype=np.float32)
+            obs = np.array([*list(states), states[-1]], dtype=np.float32)
             # acts = np.array(actions, dtype=np.float32)
-            if is_seeded_env:
-                acts = np.array(actions, dtype=np.float32)
-            else:
-                acts = np.array(actions)
+            acts = np.array(actions, dtype=np.float32) if is_seeded_env else np.array(actions)
             if acts.ndim == 1:
                 acts = acts.reshape(-1, 1)
             traj = Trajectory(obs=obs, acts=acts, infos=None, terminal=True)
@@ -1364,12 +1349,10 @@ def load_environment_data(args: argparse.Namespace) -> Tuple:
 
 # ---------- Clean Filename Generation ----------
 def generate_experiment_name(args: argparse.Namespace, env_code: str) -> str:
-    """
-    Generates a consistent, unique base name for models and outputs.
+    """Generates a consistent, unique base name for models and outputs.
     Removed fixed hyperparameters from name.
     """
-    name = f"{args.model_prefix}_{env_code}_e{args.epochs}"
-    return name
+    return f"{args.model_prefix}_{env_code}_e{args.epochs}"
 
 
 # ---------- JSON Saving Helper ----------
@@ -1385,14 +1368,13 @@ def _to_list(x):
 
 
 def save_policy_latents_to_json(
-    latents_dict: Dict[int, list],
-    trajectories: List[Trajectory],
-    true_labels: List[int],
-    obj_feats_list: List[np.ndarray],
+    latents_dict: dict[int, list],
+    trajectories: list[Trajectory],
+    true_labels: list[int],
+    obj_feats_list: list[np.ndarray],
     file_path: str,
 ):
-    """
-    Saves aggregated policy latents to a JSON file in the specified format.
+    """Saves aggregated policy latents to a JSON file in the specified format.
 
     Args:
         latents_dict: {policy_id: aggregated_embedding_list}

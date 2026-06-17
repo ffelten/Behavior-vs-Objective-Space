@@ -24,14 +24,17 @@ EPISODES_PER_POLICY = 50
 # =======================================================
 
 
-# -------------------- JSON helpergit st --------------------
+# -------------------- JSON helper --------------------
 def make_json_safe(obj):
-    """Recursively convert objects to JSON-serializable types:
+    """Recursively convert objects to JSON-serializable types.
+
+    Conversions:
     - np.ndarray -> list
     - np.* scalars -> native Python scalars
     - tuples/sets -> lists
     - bytes -> utf-8 string (with replacement)
     - dict keys -> strings
+
     Also replaces NaN/Inf with None to keep strict JSON valid.
     """
     # numpy arrays
@@ -59,8 +62,8 @@ def make_json_safe(obj):
     if hasattr(obj, "tolist"):
         try:
             return make_json_safe(obj.tolist())
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 -- best-effort serialization; fall back to the raw object
+            return obj
     return obj
 
 
@@ -69,6 +72,7 @@ def make_json_safe(obj):
 
 def _rollout_morld_policy(policy, env, episodes: int, seed: int | None = None):
     """Run episodes for a single MORLD policy (policy.wrapped).
+
     Returns: list of trajectories; each trajectory is [states, actions],
              where states/actions are lists of per-step lists/floats (JSON-friendly).
     """
@@ -92,7 +96,7 @@ def _rollout_morld_policy(policy, env, episodes: int, seed: int | None = None):
             episode_states.append(obs)
             episode_actions.append(action)
 
-            obs, reward, terminated, truncated, info = env.step(action)
+            obs, _reward, terminated, truncated, _info = env.step(action)
 
         trajectory_i = [episode_states, episode_actions]
         all_trajectories.append(trajectory_i)
@@ -104,6 +108,7 @@ def _rollout_morld_policy(policy, env, episodes: int, seed: int | None = None):
 
 
 def run_morld():
+    """Train a MORL/D agent on the configured environment and save its policy trajectories."""
     os.makedirs(MORLD_OUTPUT_DIR, exist_ok=True)
 
     env = mo_gym.make(ENV_ID)
@@ -169,7 +174,7 @@ def reder_policy(policy_id: int):
         except TypeError:
             action = pol.wrapped.eval(obs)
 
-        obs, reward, terminated, truncated, info = env.step(action)
+        obs, _reward, terminated, truncated, _info = env.step(action)
 
     env.close()
 

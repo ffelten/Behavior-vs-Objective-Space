@@ -3,7 +3,6 @@ import math
 import torch as th  # type: ignore[import]
 from torch import nn  # type: ignore[import]
 import torch.nn.functional as F  # type: ignore[import]
-from typing import Tuple
 
 # Transformer
 
@@ -23,7 +22,7 @@ class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
         # attn_bias: [H, T, T] or None
         if attn_bias is not None:
             H, T, _ = attn_bias.shape
-            B, L, _ = src.shape
+            B, _L, _ = src.shape
             # expand to [H, B, T, T] then reshape [B*H, T, T]
             bias = attn_bias.unsqueeze(1).expand(H, B, T, T).reshape(H * B, T, T)
             attn_mask = bias
@@ -75,7 +74,7 @@ class FourierFeatureEmbed(nn.Module):
     def __init__(self, in_dims=2, num_bands=64, max_freq=10.0):
         super().__init__()
         self.num_bands = num_bands
-        # Create fixed bands [1, 2, 4, ..., 2^(num_bands−1)] scaled to max_freq
+        # Create fixed bands [1, 2, 4, ..., 2^(num_bands-1)] scaled to max_freq
         bands = 2.0 ** th.linspace(0, math.log2(max_freq), num_bands)
         self.register_buffer("bands", bands)  # [num_bands]
 
@@ -145,7 +144,7 @@ class CoordMLPEncoder(nn.Module):
     """Embeds 2-D coords into d_model via Fourier features + MLP + LayerNorm,
     with dropout for augmentation.
     Input coords: [B*L, in_dims]
-    Output token embeddings: [B*L, d_model]
+    Output token embeddings: [B*L, d_model].
     """
 
     def __init__(self, d_model: int, num_bands: int = 64, max_freq: float = 10.0, in_dims: int = 2, dropout: float = 0.1):
@@ -168,13 +167,12 @@ class CoordMLPEncoder(nn.Module):
 
     def forward(self, coords: th.Tensor) -> th.Tensor:
         """coords: [B*L, in_dims]
-        returns: [B*L, d_model]
+        returns: [B*L, d_model].
         """
         if coords.shape[-1] != self.in_dims:
             raise ValueError(f"Expected coords with {self.in_dims} dimensions, got {coords.shape[-1]}")
         x = self.ff(coords)  # [B*L, feat_dim]
-        x = self.net(x)  # [B*L, d_model]
-        return x
+        return self.net(x)  # [B*L, d_model]
 
 
 class CoordMLPEncoderScaled(nn.Module):
@@ -333,7 +331,7 @@ class TemporalConvEncoder(nn.Module):
 class GridEncoderDropout3D(nn.Module):
     """3D CNN encoder over a small temporal window.
     Input: x of shape [B, T, C, H, W]
-    Output: per frame embeddings of shape [B, T, out_dim]
+    Output: per frame embeddings of shape [B, T, out_dim].
     """
 
     def __init__(
@@ -356,11 +354,11 @@ class GridEncoderDropout3D(nn.Module):
         # self.conv3 = nn.Conv3d(hidden_channels, hidden_channels, kernel_size, padding=(2,1,1),dilation=(2,1,1))
         # self.bn3   = nn.BatchNorm3d(hidden_channels)
 
-        # down‐sample spatially only
+        # down-sample spatially only
         self.pool = nn.MaxPool3d(pool_kernel)
         self.dropout = nn.Dropout3d(dropout)
 
-        # project to per‐frame embedding
+        # project to per-frame embedding
         self.adaptpool = nn.AdaptiveAvgPool3d((None, 1, 1))
         # Corrected: Input to fc is hidden_channels*4
         self.fc = nn.Linear(hidden_channels, out_dim)
@@ -534,7 +532,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
         sigma: float = 10.0,
         learnable_proj: bool = False,
     ) -> nn.Module:
-        r"""Kind \in {'det','scaled','gaussian'}"""
+        r"""Kind \in {'det','scaled','gaussian'}."""
         kind = kind.lower()
         if kind == "det":
             return CoordMLPEncoder(d_model, in_dims=in_dims, num_bands=num_bands, max_freq=max_freq, dropout=dropout)
@@ -569,40 +567,38 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
     #         # Skip the Fourier (RFF) weights!
     #         if "rff.W" in name or "ff.log_scale" in name:
     #             continue
-            
+
     #         if p.dim() > 1:
     #             nn.init.xavier_uniform_(p)
 
     def init_weights(self) -> None:
-        """
-        Initialize weights properly, respecting special layers.
-        """
-        for name, module in self.named_modules():
+        """Initialize weights properly, respecting special layers."""
+        for _name, module in self.named_modules():
             # Skip RFF layers - they have special initialization
             if isinstance(module, GaussianFourierFeatureEmbed):
                 continue  # W is already initialized as N(0, σ²)
-            
+
             # Skip normalization layers
             if isinstance(module, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
                 continue  # Default init (weight=1, bias=0) is correct
-            
+
             # Skip embeddings
             if isinstance(module, nn.Embedding):
                 continue  # Default init is fine, or use:
                 # nn.init.normal_(module.weight, mean=0, std=0.02)
-            
+
             # Initialize Linear layers
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-            
+
             # Initialize Conv layers
             if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-        
+
         # Special: CLS token and type embeddings
         nn.init.normal_(self.cls_token, mean=0, std=0.02)
         nn.init.normal_(self.state_type_embedding, mean=0, std=0.02)
@@ -674,6 +670,7 @@ class BehaviorEncoderCLSattnSATyped(nn.Module):
 
         return normalized, attn_list_agg, _, _, cls_emb, cls_attn
 
+
 class BehaviorEncoderMLPDouble(nn.Module):
     """A simple MLP baseline that flattens trajectories and processes them directly.
     No RFF, no CNN, no temporal encoding, no transformer - just MLPs.
@@ -716,11 +713,11 @@ class BehaviorEncoderMLPDouble(nn.Module):
         # Each timestep has: state (input_coord_dims) + action (1 for discrete, num_actions for continuous)
         # We'll handle both cases in forward()
         self.state_dim = input_coord_dims
-        
+
         # For discrete actions: one-hot encode to num_actions dims
         # For continuous actions: use num_actions dims directly
         self.action_dim = num_actions
-        
+
         # Flattened input size per timestep
         self.per_step_dim = self.state_dim + self.action_dim
         self.flat_input_dim = max_len * self.per_step_dim
@@ -733,7 +730,7 @@ class BehaviorEncoderMLPDouble(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_hid // 2, emb_dim),
         )
-        
+
         # Aggregation from per-token representations
         self.aggregation_mlp = nn.Sequential(
             nn.Linear(emb_dim, d_hid),
@@ -745,7 +742,7 @@ class BehaviorEncoderMLPDouble(nn.Module):
         self._dropout_p = dropout
         self._register_dropout_modules()
         self.init_weights()
-        
+
         print(f"[MLP Baseline] Simple flattened MLP encoder. Input dim: {self.flat_input_dim}, Output dim: {emb_dim}")
 
     def _register_dropout_modules(self):
@@ -772,7 +769,7 @@ class BehaviorEncoderMLPDouble(nn.Module):
         if states.dim() == 5:
             states_flat = states.view(B, T, -1)
             if states_flat.shape[-1] > self.state_dim:
-                states_flat = states_flat[..., :self.state_dim]
+                states_flat = states_flat[..., : self.state_dim]
         elif states.dim() == 3:
             states_flat = states
         else:
@@ -781,9 +778,9 @@ class BehaviorEncoderMLPDouble(nn.Module):
         # 2. Process actions
         if actions.dim() == 2:
             actions = actions.unsqueeze(-1)
-        
-        is_discrete = (actions.shape[-1] == 1)
-        
+
+        is_discrete = actions.shape[-1] == 1
+
         if is_discrete:
             actions_long = actions.long().squeeze(-1)
             actions_flat = F.one_hot(actions_long, num_classes=self.num_actions).float()
@@ -819,16 +816,16 @@ class BehaviorEncoderMLPDouble(nn.Module):
         interleaved_tokens = token_embeddings.unsqueeze(2).expand(-1, -1, 2, -1).reshape(B, 2 * T, self.d_model)
 
         dummy_attn = th.zeros(B, 2 * T, device=device)
-        
+
         return interleaved_tokens, dummy_attn, None, None, cls_emb, dummy_attn
 
+
 class BehaviorEncoderMLPBaseline(nn.Module):
-    """
-    Simplest MLP baseline that supports DIM loss.
-    
+    """Simplest MLP baseline that supports DIM loss.
+
     Architecture:
         (s,a) pairs → shared MLP → tokens → mean pool → CLS
-        
+
     Only ONE network (token_net). CLS = mean(tokens).
     No separate aggregation network.
     """
@@ -901,7 +898,7 @@ class BehaviorEncoderMLPBaseline(nn.Module):
 
         # 1. Flatten states
         if states.dim() == 5:
-            states_flat = states.view(B, T, -1)[..., :self.state_dim]
+            states_flat = states.view(B, T, -1)[..., : self.state_dim]
         elif states.dim() == 3:
             states_flat = states
         else:
@@ -910,7 +907,7 @@ class BehaviorEncoderMLPBaseline(nn.Module):
         # 2. Process actions
         if actions.dim() == 2:
             actions = actions.unsqueeze(-1)
-        
+
         if actions.shape[-1] == 1:  # Discrete
             actions_flat = F.one_hot(actions.long().squeeze(-1), num_classes=self.num_actions).float()
         else:  # Continuous
@@ -943,11 +940,11 @@ class BehaviorEncoderMLPBaseline(nn.Module):
 
         return interleaved_tokens, dummy_attn, None, None, cls_emb, dummy_attn
 
+
 class BehaviorEncoderMLPWithLocalTokens(nn.Module):
-    """
-    MLP baseline that processes the FULL trajectory at once (like Transformer)
+    """MLP baseline that processes the FULL trajectory at once (like Transformer)
     but creates local tokens for DIM loss compatibility.
-    
+
     Architecture:
         Full trajectory → Flatten → MLP → Split into tokens
         CLS = mean(tokens)
@@ -987,7 +984,7 @@ class BehaviorEncoderMLPWithLocalTokens(nn.Module):
         # --- Main Network: Full trajectory → hidden → tokens ---
         # We output directly to (num_local_tokens * emb_dim) so we can split
         hidden_dim = d_hid * 2
-        
+
         self.encoder_net = nn.Sequential(
             nn.Linear(self.flat_input_dim, hidden_dim),
             nn.GELU(),
@@ -1003,7 +1000,9 @@ class BehaviorEncoderMLPWithLocalTokens(nn.Module):
         self.init_weights()
 
         n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"[MLP LocalTokens] Full traj → {num_local_tokens} tokens (dim={emb_dim}) | CLS=mean(tokens) | Params: {n_params:,}")
+        print(
+            f"[MLP LocalTokens] Full traj → {num_local_tokens} tokens (dim={emb_dim}) | CLS=mean(tokens) | Params: {n_params:,}"
+        )
 
     def _register_dropout_modules(self):
         self._dropouts = []
@@ -1027,7 +1026,7 @@ class BehaviorEncoderMLPWithLocalTokens(nn.Module):
 
         # 1. Flatten states
         if states.dim() == 5:
-            states_flat = states.view(B, T, -1)[..., :self.state_dim]
+            states_flat = states.view(B, T, -1)[..., : self.state_dim]
         elif states.dim() == 3:
             states_flat = states
         else:
@@ -1036,7 +1035,7 @@ class BehaviorEncoderMLPWithLocalTokens(nn.Module):
         # 2. Process actions
         if actions.dim() == 2:
             actions = actions.unsqueeze(-1)
-        
+
         if actions.shape[-1] == 1:  # Discrete
             actions_flat = F.one_hot(actions.long().squeeze(-1), num_classes=self.num_actions).float()
         else:  # Continuous
@@ -1044,18 +1043,18 @@ class BehaviorEncoderMLPWithLocalTokens(nn.Module):
 
         # 3. Concatenate and flatten ENTIRE trajectory
         sa = th.cat([states_flat, actions_flat], dim=-1)
-        
+
         # Apply mask by zeroing out padded steps
         if src_key_padding_mask is not None:
             valid_mask = (~src_key_padding_mask).float().unsqueeze(-1)
             sa = sa * valid_mask
-        
+
         flat_traj = sa.reshape(B, -1)  # [B, flat_input_dim]
 
         # 4. Process full trajectory → tokens
         # [B, flat_input_dim] → [B, num_local_tokens * emb_dim]
         hidden = self.encoder_net(flat_traj)
-        
+
         # 5. Reshape to get local tokens [B, num_local_tokens, emb_dim]
         local_tokens = hidden.view(B, self.num_local_tokens, self.d_model)
 
@@ -1068,25 +1067,27 @@ class BehaviorEncoderMLPWithLocalTokens(nn.Module):
             local_tokens = F.normalize(local_tokens, p=2, dim=-1)
 
         # 8. Interleave tokens for DIM loss compatibility [B, 2*num_local_tokens, emb_dim]
-        interleaved_tokens = local_tokens.unsqueeze(2).expand(-1, -1, 2, -1).reshape(B, 2 * self.num_local_tokens, self.d_model)
+        interleaved_tokens = (
+            local_tokens.unsqueeze(2).expand(-1, -1, 2, -1).reshape(B, 2 * self.num_local_tokens, self.d_model)
+        )
 
         dummy_attn = th.zeros(B, 2 * self.num_local_tokens, device=device)
 
         return interleaved_tokens, dummy_attn, None, None, cls_emb, dummy_attn
 
+
 class BasicMLPEncoder(nn.Module):
-    """
-    A Global MLP baseline that flattens the ENTIRE trajectory into one vector
+    """A Global MLP baseline that flattens the ENTIRE trajectory into one vector
     and maps it directly to a single embedding (CLS).
-    
+
     Architecture:
         [s0, a0, s1, a1, ..., sT, aT] (Flattened)
                     ↓
               MLP (Linear -> GELU -> ...)
                     ↓
               Single Embedding [B, emb_dim]
-              
-    Note: This model does NOT support DIM loss meaningfully because it does not 
+
+    Note: This model does NOT support DIM loss meaningfully because it does not
     produce local tokens, only a global summary.
     """
 
@@ -1116,7 +1117,7 @@ class BasicMLPEncoder(nn.Module):
 
         self.state_dim = input_coord_dims
         self.action_dim = num_actions
-        
+
         # Calculate input dimension: T * (state + action)
         self.flat_input_dim = max_len * (self.state_dim + self.action_dim)
 
@@ -1160,7 +1161,7 @@ class BasicMLPEncoder(nn.Module):
 
         # 1. Flatten states
         if states.dim() == 5:
-            states_flat = states.view(B, T, -1)[..., :self.state_dim]
+            states_flat = states.view(B, T, -1)[..., : self.state_dim]
         elif states.dim() == 3:
             states_flat = states
         else:
@@ -1169,7 +1170,7 @@ class BasicMLPEncoder(nn.Module):
         # 2. Process actions
         if actions.dim() == 2:
             actions = actions.unsqueeze(-1)
-        
+
         if actions.shape[-1] == 1:  # Discrete
             actions_flat = F.one_hot(actions.long().squeeze(-1), num_classes=self.num_actions).float()
         else:  # Continuous
@@ -1177,13 +1178,13 @@ class BasicMLPEncoder(nn.Module):
 
         # 3. Concatenate [B, T, state_dim + action_dim]
         sa = th.cat([states_flat, actions_flat], dim=-1)
-        
+
         # 4. Apply Masking BEFORE flattening
         # This is crucial: we must zero out padded steps so they don't affect the MLP
         if src_key_padding_mask is not None:
             valid_mask = (~src_key_padding_mask).float().unsqueeze(-1)  # [B, T, 1]
             sa = sa * valid_mask
-        
+
         # 5. Flatten entire trajectory [B, T * (state+action)]
         flat_traj = sa.reshape(B, -1)
 
@@ -1209,6 +1210,7 @@ class BasicMLPEncoder(nn.Module):
         dummy_attn = th.zeros(B, 2 * T, device=device)
 
         return dummy_tokens, dummy_attn, None, None, cls_emb, dummy_attn
+
 
 # Decoder
 class TrajectoryDecoder(nn.Module):
@@ -1242,8 +1244,7 @@ class TrajectoryDecoder(nn.Module):
 
 # Policy-Level Set Encoder
 class PolicySetEncoder(nn.Module):
-    """
-    A permutation-invariant encoder for a *set* of trajectory embeddings.
+    """A permutation-invariant encoder for a *set* of trajectory embeddings.
     Takes a set of [N, D] embeddings (where D is usually small, e.g. 3),
     projects them to high-dim for processing, and outputs a single [1, D] embedding.
     """
@@ -1280,10 +1281,8 @@ class PolicySetEncoder(nn.Module):
         # 4. Output Projection: Squash 64D summary -> 3D Output
         self.output_proj = nn.Linear(internal_dim, emb_dim)
 
-    def forward(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
-        """
-        Input: x (th.Tensor): Set of trajectory embeddings. Shape: [N_trajs, emb_dim]
-        """
+    def forward(self, x: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
+        """Input: x (th.Tensor): Set of trajectory embeddings. Shape: [N_trajs, emb_dim]."""
         # Add batch dimension -> [1, N_trajs, emb_dim]
         x = x.unsqueeze(0)
 
@@ -1340,7 +1339,7 @@ class DeepInfoMaxLoss(nn.Module):
         local_embs (Tensor): The full sequence of token embeddings. Shape: [B, T, D_emb]
         key_padding_mask (Tensor): Mask for padded tokens. Shape: [B, T], True if padded.
         """
-        B, T, D = local_embs.shape
+        _B, T, _D = local_embs.shape
         # Ensure the key_padding_mask matches the sequence length of local_embs
         if key_padding_mask.size(1) != local_embs.size(1):
             raise ValueError("Mismatch between mask and interleaved sequence length.")
@@ -1373,14 +1372,12 @@ class DeepInfoMaxLoss(nn.Module):
         valid_token_mask = ~key_padding_mask
 
         # Apply the mask and compute the mean loss over valid tokens
-        masked_loss = loss_unmasked[valid_token_mask].mean()
-
-        return masked_loss
+        return loss_unmasked[valid_token_mask].mean()
 
 
 class InstanceLoss(nn.Module):
     def __init__(self, temperature, device):
-        super(InstanceLoss, self).__init__()
+        super().__init__()
         self.temperature = temperature
         self.device = device
         self.loss_type = "IL"
@@ -1424,8 +1421,7 @@ class InstanceLoss(nn.Module):
 
 
 class VarianceCovarianceLoss(nn.Module):
-    """
-    Forces embeddings to span the full D-dimensional space (Variance)
+    """Forces embeddings to span the full D-dimensional space (Variance)
     and ensures dimensions are orthogonal (Covariance).
     Based on VICReg.
     """
@@ -1457,15 +1453,14 @@ class VarianceCovarianceLoss(nn.Module):
 
 
 class VICRegLoss(nn.Module):
-    """
-    Full VICReg loss with all three components:
+    """Full VICReg loss with all three components:
     - Invariance: MSE between two views of the same sample (requires augmentation)
     - Variance: Force each dimension to have std >= 1
-    - Covariance: Force dimensions to be uncorrelated
-    
+    - Covariance: Force dimensions to be uncorrelated.
+
     Reference: Bardes et al., "VICReg: Variance-Invariance-Covariance Regularization"
     """
-    
+
     def __init__(
         self,
         inv_weight: float = 25.0,
@@ -1478,55 +1473,50 @@ class VICRegLoss(nn.Module):
         self.var_weight = var_weight
         self.cov_weight = cov_weight
         self.eps = eps
-    
-    def forward(self, z1: th.Tensor, z2: th.Tensor) -> Tuple[th.Tensor, dict]:
-        """
-        Compute full VICReg loss between two views.
-        
+
+    def forward(self, z1: th.Tensor, z2: th.Tensor) -> tuple[th.Tensor, dict]:
+        """Compute full VICReg loss between two views.
+
         Args:
             z1: First view embeddings [B, D] (NOT normalized)
             z2: Second view embeddings [B, D] (NOT normalized)
-            
+
         Returns:
             total_loss: Weighted sum of all components
             loss_dict: Dictionary with individual loss values for logging
         """
         B, D = z1.shape
-        
+
         # === 1. Invariance Loss ===
         # MSE between the two views (same sample should have same embedding)
         inv_loss = F.mse_loss(z1, z2)
-        
+
         # === 2. Variance Loss ===
         # Force std of each dimension >= 1 (across batch)
         std_z1 = th.sqrt(z1.var(dim=0) + self.eps)
         std_z2 = th.sqrt(z2.var(dim=0) + self.eps)
         var_loss = th.mean(F.relu(1 - std_z1)) + th.mean(F.relu(1 - std_z2))
-        
+
         # === 3. Covariance Loss ===
         # Force off-diagonal elements of covariance matrix to be zero
         z1_centered = z1 - z1.mean(dim=0)
         z2_centered = z2 - z2.mean(dim=0)
-        
+
         cov_z1 = (z1_centered.T @ z1_centered) / (B - 1)  # [D, D]
         cov_z2 = (z2_centered.T @ z2_centered) / (B - 1)  # [D, D]
-        
+
         # Off-diagonal elements
         off_diag_mask = ~th.eye(D, dtype=th.bool, device=z1.device)
         cov_loss = (cov_z1[off_diag_mask].pow(2).sum() + cov_z2[off_diag_mask].pow(2).sum()) / D
-        
+
         # === Total Loss ===
-        total_loss = (
-            self.inv_weight * inv_loss +
-            self.var_weight * var_loss +
-            self.cov_weight * cov_loss
-        )
-        
+        total_loss = self.inv_weight * inv_loss + self.var_weight * var_loss + self.cov_weight * cov_loss
+
         loss_dict = {
-            'inv': inv_loss.item(),
-            'var': var_loss.item(),
-            'cov': cov_loss.item(),
-            'total': total_loss.item(),
+            "inv": inv_loss.item(),
+            "var": var_loss.item(),
+            "cov": cov_loss.item(),
+            "total": total_loss.item(),
         }
-        
+
         return total_loss, loss_dict

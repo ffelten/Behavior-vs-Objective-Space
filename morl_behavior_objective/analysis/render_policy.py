@@ -1,10 +1,11 @@
-from morl_behavior_objective.utils import render_policy
-import numpy as np
-from morl_behavior_objective.utils import get_pareto_front
 from pathlib import Path
 
+import numpy as np
 
-RENDER="cheetah" #"hopper" #"cheetah"
+from morl_behavior_objective.utils import get_pareto_front
+from morl_behavior_objective.utils import render_policy
+
+RENDER = "cheetah"  # "hopper" #"cheetah"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 seed = 0
 
@@ -15,7 +16,7 @@ environments = {
         "embedding_path": f"PROJECT_ROOT/trajectories/morld/mo-halfcheetah-v5/embeddings/mean_be_MHC_e100_seed{seed}.json",
     },
     "highway": {
-"trajectory_dir": f"{PROJECT_ROOT}/trajectories/morld/mo-highway-fast-v0/seed0",
+        "trajectory_dir": f"{PROJECT_ROOT}/trajectories/morld/mo-highway-fast-v0/seed0",
         "embedding_path": f"{PROJECT_ROOT}/trajectories/morld/mo-highway-fast-v0/embeddings/mean_be_MHW_e100_seed{seed}.json",
     },
     "hopper_2d": {
@@ -35,14 +36,13 @@ returns_highway = get_pareto_front(environments["highway"]["trajectory_dir"])
 returns_hopper_2d = get_pareto_front(environments["hopper_2d"]["trajectory_dir"])
 
 
-
 ####################### CHEETAH ########################
 
-#Cheetah is a two-objective problem, so we use normal lextargsort
+# Cheetah is a two-objective problem, so we use normal lextargsort
 # Get policies with the  secondhighest Lipschitz constants
 
-if RENDER=="cheetah":
-    policies_list=[[45,46], [22,23], [56,57], [7,8]]
+if RENDER == "cheetah":
+    policies_list = [[45, 46], [22, 23], [56, 57], [7, 8]]
     for policies in policies_list:
         # see what policies these correspond to in the original pareto front
         org_policy_id = np.lexsort(returns_cheetah.T)[policies]
@@ -66,11 +66,10 @@ if RENDER=="cheetah":
         )
 
 
-
 ####################### HIGHWAY ########################
-#Highway has 3 objectives so we have to use a different ordering method
-if RENDER=="highway":
-    pareto_frontier=returns_highway
+# Highway has 3 objectives so we have to use a different ordering method
+if RENDER == "highway":
+    pareto_frontier = returns_highway
     pf_points = pareto_frontier.copy()
     n_points = len(pf_points)
 
@@ -86,9 +85,7 @@ if RENDER=="highway":
         seq_idx.append(nearest_idx)
         remaining_idx.remove(nearest_idx)
 
-
-
-    policies_list=[[2,3],[3,4]]
+    policies_list = [[2, 3], [3, 4]]
     for policies in policies_list:
         # see what policies these correspond to in the original pareto front
         org_policy_id = np.array(seq_idx)[policies]
@@ -110,4 +107,3 @@ if RENDER=="highway":
             save_dic=f"videos/highway/policies_{policies}",
             base_path=PROJECT_ROOT,
         )
-
