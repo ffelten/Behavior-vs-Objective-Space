@@ -509,7 +509,9 @@ def train_epoch(
     total_loss = 0.0
 
     # Check if encoder is MLP baseline (no CLS token in output)
-    is_mlp_baseline = hasattr(encoder, "model_type") and "MLP" in encoder.model_type
+    is_mlp_baseline = hasattr(encoder, "model_type") and (
+        "MLP" in encoder.model_type or "LSTM" in encoder.model_type
+    )
 
     for states, actions, masks, _, _returns in loader:
         states, actions, masks = states.to(device), actions.to(device), masks.to(device)

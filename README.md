@@ -73,7 +73,7 @@ Common flags:
 | `--emb_dim` | 3 | Embedding dimension |
 | `--d_hid` | 128 | Hidden dimension (DST runs use 32) |
 | `--model_dir` | `final_models/no_topo/` | Where models are saved/loaded |
-| `--model_prefix` | `be` | Filename prefix (`basic` for the baseline) |
+| `--model_prefix` | `be` | Filename prefix (`basic`/ `lstm` for the baselines) |
 | `--device` | cuda/mps/cpu | Compute device (auto-detected) |
 | `--visualize` | off | Plot trajectory embeddings before aggregation |
 

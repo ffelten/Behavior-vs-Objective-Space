@@ -1211,6 +1211,152 @@ class BasicMLPEncoder(nn.Module):
 
         return dummy_tokens, dummy_attn, None, None, cls_emb, dummy_attn
 
+class BehaviorEncoderLSTMBaseline(nn.Module):
+    """
+    LSTM-based baseline encoder.
+
+    Architecture:
+        (s_t, a_t) -> per-step MLP -> LSTM(d_hid) -> CLS projection -> emb_dim
+
+    This keeps the external embedding dimension small (e.g. 3), but gives the
+    recurrent backbone enough capacity to be comparable to the MLP baseline.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        cnn_output_dim: int,
+        steps: int,
+        nhead: int,
+        d_hid: int,
+        emb_dim: int,
+        num_actions: int,
+        nlayers: int = 2,
+        dropout: float = 0.1,
+        max_len: int = 100,
+        input_coord_dims: int = 2,
+        normalize_output_embeddings: bool = True,
+        **kwargs,
+    ):
+        super().__init__()
+        self.d_model = emb_dim
+        self.model_type = "BE_LSTM"
+        self.input_coord_dims = input_coord_dims
+        self.max_len = max_len
+        self.num_actions = num_actions
+        self.normalize_output_embeddings = normalize_output_embeddings
+
+        self.state_dim = input_coord_dims
+        self.action_dim = num_actions
+        self.per_step_dim = self.state_dim + self.action_dim
+
+        # Per-step feature extractor before recurrent modeling.
+        self.step_encoder = nn.Sequential(
+            nn.Linear(self.per_step_dim, d_hid),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_hid, d_hid),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
+        # Recurrent backbone with hidden size d_hid, not emb_dim.
+        self.lstm = nn.LSTM(
+            input_size=d_hid,
+            hidden_size=d_hid,
+            num_layers=nlayers,
+            batch_first=True,
+            dropout=dropout if nlayers > 1 else 0.0,
+            bidirectional=False,
+        )
+
+        # Project recurrent features down to the requested embedding size.
+        self.token_proj = nn.Linear(d_hid, emb_dim)
+        self.cls_proj = nn.Linear(d_hid, emb_dim)
+
+        self._dropout_p = dropout
+        self._register_dropout_modules()
+        self.init_weights()
+
+        n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"[LSTM Baseline] (s,a) -> MLP -> LSTM(d_hid) -> CLS | Params: {n_params:,}")
+
+    def _register_dropout_modules(self):
+        self._dropouts = []
+        for module in self.modules():
+            if isinstance(module, nn.Dropout):
+                self._dropouts.append(module)
+
+    def set_dropout(self, p: float):
+        for dropout_layer in self._dropouts:
+            dropout_layer.p = p
+        self._dropout_p = p
+
+    def init_weights(self) -> None:
+        for name, parameter in self.named_parameters():
+            if parameter.dim() > 1 and "weight_hh" not in name:
+                nn.init.xavier_uniform_(parameter)
+        for name, parameter in self.named_parameters():
+            if "bias" in name:
+                nn.init.zeros_(parameter)
+
+    def _prepare_states(self, states: th.Tensor) -> th.Tensor:
+        B, T, *_ = states.shape
+        if states.dim() == 5:
+            return states.view(B, T, -1)[..., : self.state_dim]
+        if states.dim() == 3:
+            return states
+        raise ValueError(f"Unsupported state dimension: {states.dim()}")
+
+    def _prepare_actions(self, actions: th.Tensor) -> th.Tensor:
+        if actions.dim() == 2:
+            actions = actions.unsqueeze(-1)
+
+        if actions.shape[-1] == 1:
+            return F.one_hot(actions.long().squeeze(-1), num_classes=self.num_actions).float()
+
+        return actions
+
+    def forward(self, states: th.Tensor, actions: th.Tensor, src_key_padding_mask: th.Tensor | None = None) -> tuple:
+        B, T, *_ = states.shape
+        device = states.device
+
+        states_flat = self._prepare_states(states)
+        actions_flat = self._prepare_actions(actions)
+        sa = th.cat([states_flat, actions_flat], dim=-1)  # [B, T, per_step_dim]
+
+        step_feats = self.step_encoder(sa)  # [B, T, d_hid]
+
+        if src_key_padding_mask is not None:
+            lengths = (~src_key_padding_mask).sum(dim=1).to(th.int64).cpu()
+            packed = nn.utils.rnn.pack_padded_sequence(
+                step_feats, lengths=lengths, batch_first=True, enforce_sorted=False
+            )
+            packed_out, (h_n, _) = self.lstm(packed)
+            lstm_out, _ = nn.utils.rnn.pad_packed_sequence(packed_out, batch_first=True, total_length=T)
+        else:
+            lstm_out, (h_n, _) = self.lstm(step_feats)
+
+        # Final hidden state from the last LSTM layer.
+        cls_hidden = h_n[-1]  # [B, d_hid]
+        cls_emb = self.cls_proj(cls_hidden)  # [B, emb_dim]
+
+        token_embeddings = self.token_proj(lstm_out)  # [B, T, emb_dim]
+
+        if self.normalize_output_embeddings:
+            cls_emb = F.normalize(cls_emb, p=2, dim=-1)
+            token_embeddings = F.normalize(token_embeddings, p=2, dim=-1)
+
+        # DIM-compatible token shape: [B, 2*T, emb_dim]
+        interleaved_tokens = (
+            token_embeddings.unsqueeze(2)
+            .expand(-1, -1, 2, -1)
+            .reshape(B, 2 * T, self.d_model)
+        )
+
+        dummy_attn = th.zeros(B, 2 * T, device=device)
+
+        return interleaved_tokens, dummy_attn, None, None, cls_emb, dummy_attn
 
 # Decoder
 class TrajectoryDecoder(nn.Module):

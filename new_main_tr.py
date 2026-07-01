@@ -13,11 +13,8 @@ from sklearn.metrics import pairwise_distances  # type: ignore[import]
 import torch as th  # type: ignore[import]
 from tqdm import tqdm  # type: ignore[import]
 
-from morl_behavior_objective.methods.behaviorencoder import BasicMLPEncoder
-from morl_behavior_objective.methods.behaviorencoder import BehaviorEncoderCLSattnSATyped
-from morl_behavior_objective.methods.behaviorencoder import BehaviorEncoderMLPBaseline
-from morl_behavior_objective.methods.behaviorencoder import DeepInfoMaxLoss
-from morl_behavior_objective.methods.behaviorencoder import InstanceLoss
+from morl_behavior_objective.methods.behaviorencoder import BasicMLPEncoder, BehaviorEncoderLSTMBaseline, BehaviorEncoderCLSattnSATyped, BehaviorEncoderMLPBaseline
+from morl_behavior_objective.methods.behaviorencoder import DeepInfoMaxLoss, InstanceLoss
 from morl_behavior_objective.methods.behaviorencoder import PolicySetEncoder
 from morl_behavior_objective.methods.behaviorencoder import TrajectoryDecoder
 from morl_behavior_objective.methods.behaviorencoder import VarianceCovarianceLoss
@@ -403,6 +400,8 @@ def main():
             if args.model_prefix == "basic"
             else BehaviorEncoderMLPBaseline
             if args.model_prefix == "mlp"
+            else BehaviorEncoderLSTMBaseline
+            if args.model_prefix == "lstm"
             else None
         )
         if baseline_model is None:
