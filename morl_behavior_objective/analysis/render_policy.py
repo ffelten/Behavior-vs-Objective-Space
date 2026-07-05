@@ -35,14 +35,23 @@ returns_highway = get_pareto_front(environments["highway"]["trajectory_dir"])
 
 returns_hopper_2d = get_pareto_front(environments["hopper_2d"]["trajectory_dir"])
 
+<<<<<<< Updated upstream
+=======
+returns_hopper = get_pareto_front(environments["hopper_3d"]["trajectory_dir"])
+>>>>>>> Stashed changes
 
 ####################### CHEETAH ########################
 
 # Cheetah is a two-objective problem, so we use normal lextargsort
 # Get policies with the  secondhighest Lipschitz constants
 
+<<<<<<< Updated upstream
 if RENDER == "cheetah":
     policies_list = [[45, 46], [22, 23], [56, 57], [7, 8]]
+=======
+if RENDER=="cheetah":
+    policies_list=[[12,13], [63,64]]
+>>>>>>> Stashed changes
     for policies in policies_list:
         # see what policies these correspond to in the original pareto front
         org_policy_id = np.lexsort(returns_cheetah.T)[policies]
@@ -66,10 +75,18 @@ if RENDER == "cheetah":
         )
 
 
+<<<<<<< Updated upstream
 ####################### HIGHWAY ########################
 # Highway has 3 objectives so we have to use a different ordering method
 if RENDER == "highway":
     pareto_frontier = returns_highway
+=======
+
+####################### HOPPER ########################
+#hopper has 3 objectives so we have to use a different ordering method
+if RENDER=="hopper":
+    pareto_frontier=returns_hopper
+>>>>>>> Stashed changes
     pf_points = pareto_frontier.copy()
     n_points = len(pf_points)
 
@@ -85,25 +102,31 @@ if RENDER == "highway":
         seq_idx.append(nearest_idx)
         remaining_idx.remove(nearest_idx)
 
+<<<<<<< Updated upstream
     policies_list = [[2, 3], [3, 4]]
+=======
+
+
+    policies_list=[[50,51],[52,53],[116,117],[83,84]]
+>>>>>>> Stashed changes
     for policies in policies_list:
         # see what policies these correspond to in the original pareto front
         org_policy_id = np.array(seq_idx)[policies]
 
         render_policy(
-            env_id="mo-highway-fast-v0",
-            check_point="MORL_policies/mo-highway-fast-v0/seed0.tar",
+            env_id="mo-hopper-v5",
+            check_point="MORL_policies/mo-hopper-v5/seed0.tar",
             policy_id=org_policy_id[0],
             n_episodes=5,
-            save_dic=f"videos/highway/policies_{policies}",
+            save_dic=f"videos/hopper/policies_{policies}",
             base_path=PROJECT_ROOT,
         )
 
         render_policy(
-            env_id="mo-highway-fast-v0",
-            check_point="MORL_policies/mo-highway-fast-v0/seed0.tar",
+            env_id="mo-hopper-v5",
+            check_point="MORL_policies/mo-hopper-v5/seed0.tar",
             policy_id=org_policy_id[1],
             n_episodes=5,
-            save_dic=f"videos/highway/policies_{policies}",
+            save_dic=f"videos/hopper/policies_{policies}",
             base_path=PROJECT_ROOT,
         )

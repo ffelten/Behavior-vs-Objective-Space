@@ -22,7 +22,7 @@ params = {
     "init_hyperparams": {
         "scalarization_method": "ws",
         "evaluation_mode": "ser",
-        "policy_name": "MOSACDiscrete",  # "MOSACDiscrete",  # "MOSAC",
+        "policy_name": "MOSAC",  # "MOSACDiscrete",  # "MOSAC",
         "shared_buffer": False,
         "weight_adaptation_method": None,
         "exchange_every": 10_000,
@@ -265,7 +265,8 @@ def render_policy(
         # check if directory exists otherwise create it
         env = mo_gym.make(env_id, render_mode="human")
     if "mo-halfcheetah" in env_id.lower() or "mo-hopper" in env_id.lower():
-        env = TimeLimit(env, max_episode_steps=100)
+        env = TimeLimit(env, max_episode_steps=100
+                        )
     elif "highway" in env_id.lower():
         env = FlattenObservation(env)
     else:
